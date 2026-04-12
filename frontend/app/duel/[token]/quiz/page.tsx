@@ -39,7 +39,10 @@ export default function DuelTokenQuizPage() {
   const [showResult, setShowResult] = useState(false);
   const [creatorScore, setCreatorScore] = useState(creator?.score || 0);
   const [opponentScore, setOpponentScore] = useState(opponent?.score || 0);
+  const [creatorAnswers, setCreatorAnswers] = useState(0);
+  const [opponentAnswers, setOpponentAnswers] = useState(0);
   const [interrupted, setInterrupted] = useState(false);
+  const [isFinishing, setIsFinishing] = useState(false);
   const [isSocketReconnecting, setIsSocketReconnecting] = useState(false);
 
   const timerRef = useRef<NodeJS.Timeout | null>(null);
@@ -168,9 +171,11 @@ export default function DuelTokenQuizPage() {
       });
     }, 1000);
 
-    const onScoreUpdate = (data: { creatorScore: number; opponentScore: number }) => {
+    const onScoreUpdate = (data: { creatorScore: number; opponentScore: number, creatorAnswers?: number, opponentAnswers?: number }) => {
       setCreatorScore(data.creatorScore);
       setOpponentScore(data.opponentScore);
+      if (data.creatorAnswers !== undefined) setCreatorAnswers(data.creatorAnswers);
+      if (data.opponentAnswers !== undefined) setOpponentAnswers(data.opponentAnswers);
     };
 
     const onMyResult = (data: any) => {
@@ -215,7 +220,8 @@ export default function DuelTokenQuizPage() {
         setInterrupted(true);
         setTimeout(() => router.push("/duel/winner"), 2500);
       } else {
-        setTimeout(() => router.push("/duel/winner"), 300);
+        setIsFinishing(true);
+        setTimeout(() => router.push("/duel/winner"), 1500);
       }
     };
 
@@ -292,6 +298,9 @@ export default function DuelTokenQuizPage() {
   const them = storedRole === "creator" ? opponent : creator;
   const myScore = storedRole === "creator" ? creatorScore : opponentScore;
   const theirScore = storedRole === "creator" ? opponentScore : creatorScore;
+  const myProgress = storedRole === "creator" ? creatorAnswers : opponentAnswers;
+  const theirProgress = storedRole === "creator" ? opponentAnswers : creatorAnswers;
+  
   const timerRatio = timeLeft / (currentQuestion.duration || 1);
   const timerColor = timerRatio > 0.5 ? "#00B894" : timerRatio > 0.25 ? "#FDCB6E" : "#FF4444";
 
@@ -330,11 +339,16 @@ export default function DuelTokenQuizPage() {
             <div className="flex-1 flex items-center gap-2 justify-end">
               <div className="text-right">
                 <p className="text-[10px] opacity-40 font-bold uppercase text-white">Lawan</p>
-                <p className="text-base font-black" style={{ color: "var(--accent-purple-light)", fontFamily: "var(--font-score)" }}>
-                  {theirScore.toLocaleString()}
-                </p>
+                <div className="flex flex-col items-end">
+                  <p className="text-base font-black" style={{ color: "var(--accent-purple-light)", fontFamily: "var(--font-score)", lineHeight: 1 }}>
+                    {theirScore.toLocaleString()}
+                  </p>
+                  <p className="text-[9px] font-bold mt-0.5 px-1.5 rounded-full" style={{ background: "rgba(108,92,231,0.2)", color: "#A29BFE" }}>
+                    Q: {theirProgress}/{totalQuestions}
+                  </p>
+                </div>
               </div>
-              <div className="w-8 h-8 rounded-lg flex items-center justify-center text-base flex-shrink-0"
+              <div className="w-8 h-8 rounded-lg flex items-center justify-center text-base flex-shrink-0 relative"
                 style={{ background: "rgba(108,92,231,0.15)", border: "1px solid rgba(108,92,231,0.3)" }}>
                 <span>{them?.avatar?.emoji || "🐨"}</span>
               </div>
@@ -444,12 +458,23 @@ export default function DuelTokenQuizPage() {
       </div>
 
       {/* Sudden Death overlay */}
-      {interrupted && (
+      {interrupted && !isFinishing && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 backdrop-blur-sm" style={{ background: "rgba(10,10,15,0.85)" }}>
           <div className="w-full max-w-xs p-6 rounded-3xl text-center" style={{ background: "rgba(255,102,102,0.15)", border: "1px solid rgba(255,102,102,0.3)" }}>
             <div className="text-4xl mb-4 animate-bounce">🚨</div>
             <h3 className="text-xl font-black text-white mb-2" style={{ fontFamily: "var(--font-heading)" }}>Sudden Death!</h3>
             <p className="text-sm opacity-80 text-white font-medium">Lawan telah menyelesaikan kuis lebih dulu.<br /><br />Permainan berakhir.</p>
+          </div>
+        </div>
+      )}
+
+      {/* Finishing / Preparing Result overlay */}
+      {isFinishing && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 backdrop-blur-sm" style={{ background: "rgba(10,10,15,0.9)" }}>
+          <div className="w-full max-w-xs p-6 rounded-3xl text-center flex flex-col items-center" style={{ border: "1px solid rgba(0,184,148,0.3)" }}>
+            <div className="w-16 h-16 border-4 border-green-400/20 border-t-green-400 rounded-full animate-spin mb-4" />
+            <h3 className="text-xl font-black text-white mb-2" style={{ fontFamily: "var(--font-heading)" }}>Kuis Selesai!</h3>
+            <p className="text-sm opacity-80 text-white font-medium">Menyesuaikan hasil akhir...</p>
           </div>
         </div>
       )}

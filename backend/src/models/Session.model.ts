@@ -76,7 +76,7 @@ const AvatarSchema = new Schema<IAvatar>(
 const AnswerSchema = new Schema<IAnswer>(
   {
     questionIndex: { type: Number, required: true },
-    answer: { type: String, required: true },
+    answer: { type: String, default: "" },
     isCorrect: { type: Boolean, required: true },
     responseTime: { type: Number, required: true },
     pointsEarned: { type: Number, default: 0 },

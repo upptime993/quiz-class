@@ -27,6 +27,7 @@ function DuelLobbyContent() {
   const [copied, setCopied] = useState(false);
   const [copiedLink, setCopiedLink] = useState(false);
   const [startLoading, setStartLoading] = useState(false);
+  const [countdownNum, setCountdownNum] = useState<number | string | null>(null);
   const [avatarSelected, setAvatarSelected] = useState(false);
   const [showAvatarPicker, setShowAvatarPicker] = useState(false);
   const [myAvatar, setMyAvatar] = useState({ emoji: role === "creator" ? "🦊" : "🐨", mixEmoji: null as null | string, mixImageUrl: null as null | string });
@@ -92,8 +93,9 @@ function DuelLobbyContent() {
       if (data.status) setStatus(data.status);
     });
 
-    socket.on("duel:countdown", () => {
+    socket.on("duel:countdown", (data: { count: number | string }) => {
       setStatus("countdown");
+      setCountdownNum(data.count);
     });
 
     socket.on("duel:questionStart", (data: any) => {
@@ -505,6 +507,25 @@ function DuelLobbyContent() {
               style={{ background: "linear-gradient(135deg, #FF4444, #FF8C00)", color: "white" }}>
               ✅ Konfirmasi Avatar
             </button>
+          </div>
+        </div>
+      )}
+
+      {/* Countdown Overlay */}
+      {status === "countdown" && countdownNum !== null && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 backdrop-blur-md" 
+             style={{ background: "rgba(10,10,15,0.9)" }}>
+          <div className="flex flex-col items-center">
+            <h2 className="text-3xl font-black text-white mb-8" style={{ fontFamily: "var(--font-heading)" }}>
+              Pertarungan Dimulai!
+            </h2>
+            <div className="w-40 h-40 rounded-full flex items-center justify-center border-4 border-white animate-pulse"
+                 style={{ background: "linear-gradient(135deg, rgba(255,140,66,0.3), rgba(108,92,231,0.3))" }}>
+              <span className="text-7xl font-black text-white animate-bounce" style={{ fontFamily: "var(--font-score)" }}>
+                {countdownNum}
+              </span>
+            </div>
+            <p className="mt-8 font-bold text-white opacity-60">Bersiaplah...</p>
           </div>
         </div>
       )}

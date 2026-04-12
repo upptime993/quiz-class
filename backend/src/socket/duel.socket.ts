@@ -419,6 +419,8 @@ export const initDuelSocket = (io: Server): void => {
           emitToRoom(io, token, "duel:scoreUpdate", {
             creatorScore: updatedRoom.creator.score,
             opponentScore: updatedRoom.opponent?.score || 0,
+            creatorAnswers: updatedRoom.creator.answers.length,
+            opponentAnswers: updatedRoom.opponent?.answers.length || 0,
           });
 
           // Cek apakah ini soal terakhir untuk player ini
