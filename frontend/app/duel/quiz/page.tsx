@@ -170,9 +170,9 @@ export default function DuelQuizPage() {
       
       if (isInterrupted) {
          setInterrupted(true);
-         setTimeout(() => router.push("/duel/winner"), 3000);
+         setTimeout(() => window.location.href = "/duel/winner", 2500);
       } else {
-         setTimeout(() => router.push("/duel/winner"), 1500);
+         setTimeout(() => window.location.href = "/duel/winner", 100);
       }
     };
 

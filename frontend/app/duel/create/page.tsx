@@ -76,7 +76,7 @@ export default function DuelCreatePage() {
         setRole("creator");
         setStoreUsername(username.trim());
         setQuizInfo(quizTitle, totalQuestions);
-        router.push(`/duel/lobby?token=${token}&username=${encodeURIComponent(username.trim())}`);
+        window.location.href = `/duel/lobby?token=${token}&username=${encodeURIComponent(username.trim())}`;
       }
     } catch (err: any) {
       showToast(err.response?.data?.message || "Gagal membuat room", "error");

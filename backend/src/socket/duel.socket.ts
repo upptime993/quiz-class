@@ -433,7 +433,7 @@ export const initDuelSocket = (io: Server): void => {
                     answerType: nextQ.answerType || "multiple_choice",
                     options: nextQ.answerType === "text" || nextQ.answerType === "matching" ? [] : nextQ.options,
                     matchPairs: nextQ.answerType === "matching" ? nextQ.matchPairs || [] : [],
-                    duration: currentRoom.customDuration ?? nextQ.duration,
+                    duration: currentRoom.customDuration && currentRoom.customDuration >= 5 ? currentRoom.customDuration : nextQ.duration,
                     totalQuestions: quiz.questions.length,
                   },
                   questionIndex: nextQIndex,
