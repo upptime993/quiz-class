@@ -37,7 +37,11 @@ export default function TokenQuizPage() {
   const [showCountdown, setShowCountdown] = useState(false);
   const [isWaiting, setIsWaiting] = useState(false);
   const [textAnswer, setTextAnswer] = useState("");
-  const [reconnecting, setReconnecting] = useState(true);
+  const [reconnecting, setReconnecting] = useState(() => {
+    // Hindari flicker "Memulihkan Sesi" jika pindah soal (socket sudah nyala & soal sudah ada)
+    const socket = getPlayerSocket();
+    return !(socket.connected && useQuizStore.getState().currentQuestion);
+  });
   const [isSocketReconnecting, setIsSocketReconnecting] = useState(false);
   const [isTransitioning, setIsTransitioning] = useState(false);
 

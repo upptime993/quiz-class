@@ -18,7 +18,7 @@ type ResultPhase = "reveal" | "leaderboard" | "waiting_next";
 
 export default function ResultPage() {
   const router = useRouter();
-  const { username, avatar, score, setScore } = usePlayerStore();
+  const { username, avatar, score, setScore, token } = usePlayerStore();
   const { setIsAnswered } = usePlayerStore();
   const {
     result,
@@ -115,7 +115,7 @@ export default function ResultPage() {
       setIsAnswered(false); // CRITICAL: reset for next question
       setStatus("active");
 
-      router.push("/quiz");
+      router.push(`/quiz/${token}`);
     });
 
     socket.on("session:finished", (data: any) => {
