@@ -150,7 +150,6 @@ const SessionSchema = new Schema<ISession>(
 );
 
 // Index untuk pencarian cepat
-SessionSchema.index({ token: 1 });
 SessionSchema.index({ status: 1 });
 
 export default mongoose.model<ISession>("Session", SessionSchema);

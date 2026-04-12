@@ -98,7 +98,6 @@ const DuelRoomSchema = new Schema<IDuelRoom>(
   { timestamps: true }
 );
 
-DuelRoomSchema.index({ token: 1 });
 DuelRoomSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0 }); // TTL index
 
 export default mongoose.model<IDuelRoom>("DuelRoom", DuelRoomSchema);
