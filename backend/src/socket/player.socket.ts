@@ -2,6 +2,14 @@ import { Server, Socket } from "socket.io";
 import Session from "../models/Session.model";
 import { validateToken } from "../services/token.service";
 import { processAnswer, getLeaderboard, checkAndAutoFinish } from "../services/game.service";
+import { setJSON, getJSON, delKey, keys, TTL } from "../services/redis.service";
+
+// ─── Tipe data reconnect ──────────────────────────────────────
+interface ReconnectData {
+  token: string;
+  username: string;
+  avatarEmoji: string;
+}
 
 export const initPlayerSocket = (io: Server): void => {
   io.on("connection", (socket: Socket) => {
@@ -42,12 +50,77 @@ export const initPlayerSocket = (io: Server): void => {
             return;
           }
 
-          // Cek apakah socket sudah pernah join (reconnect scenario)
+          // ── RECONNECT: cek apakah username ini sudah pernah join ──
+          // Ini menangani kasus: user sudah join sebelumnya (berbeda socketId karena refresh)
+          const existingByUsername = session.participants.find(
+            (p) => p.username.toLowerCase() === username.toLowerCase()
+          );
+
+          if (existingByUsername) {
+            // Update socketId ke yang baru
+            existingByUsername.socketId = socket.id;
+            existingByUsername.isConnected = true;
+            await session.save();
+
+            const room = `session:${upperToken}`;
+            socket.join(room);
+            (socket as any).sessionToken = upperToken;
+            (socket as any).username = existingByUsername.username;
+
+            // Simpan data reconnect di Redis (untuk future reconnects)
+            await setJSON(
+              keys.playerReconnect(upperToken, existingByUsername.username),
+              { token: upperToken, username: existingByUsername.username, avatarEmoji: existingByUsername.avatar?.emoji || "🦊" },
+              TTL.RECONNECT_DATA
+            );
+
+            // Kirim state session ke player (untuk render UI yang benar saat reconnect)
+            socket.emit("session:joined", {
+              sessionId: session._id,
+              token: upperToken,
+              reconnected: true,
+              status: session.status,
+              currentQuestion: session.currentQuestion,
+              participants: session.participants.map((p) => ({
+                username: p.username,
+                avatar: p.avatar,
+                isConnected: p.isConnected,
+                score: p.score,
+              })),
+            });
+
+            // Beritahu peserta lain bahwa player ini reconnect
+            const room2 = `session:${upperToken}`;
+            const connectedCount = session.participants.filter((p) => p.isConnected).length;
+            io.to(room2).emit("session:playerJoined", {
+              username: existingByUsername.username,
+              avatar: existingByUsername.avatar,
+              participantCount: connectedCount,
+              participants: session.participants.map((p) => ({
+                username: p.username,
+                avatar: p.avatar,
+                score: p.score || 0,
+                answers: p.answers || [],
+                joinedAt: p.joinedAt,
+                isConnected: p.isConnected,
+              })),
+              reconnected: true,
+            });
+            io.of("/admin").to(room2).emit("session:playerJoined", {
+              username: existingByUsername.username,
+              participantCount: connectedCount,
+              reconnected: true,
+            });
+
+            console.log(`🔄 ${existingByUsername.username} reconnect ke sesi ${upperToken}`);
+            return;
+          }
+
+          // Cek apakah socket sudah pernah join dengan socket ID ini (duplikat)
           const existingBySocket = session.participants.find(
             (p) => p.socketId === socket.id
           );
           if (existingBySocket) {
-            // Sudah terdaftar dengan socket ini, hanya perlu join room
             const room = `session:${upperToken}`;
             socket.join(room);
             (socket as any).sessionToken = upperToken;
@@ -64,7 +137,7 @@ export const initPlayerSocket = (io: Server): void => {
             return;
           }
 
-          // Cek username sudah dipakai belum (dan terhubung)
+          // Cek username sudah dipakai oleh yang sedang terhubung
           const usernameExists = session.participants.some(
             (p) => p.username.toLowerCase() === username.toLowerCase() && p.isConnected
           );
@@ -76,7 +149,7 @@ export const initPlayerSocket = (io: Server): void => {
             return;
           }
 
-          // Tambah participant
+          // Tambah participant baru
           session.participants.push({
             socketId: socket.id,
             username: username.trim(),
@@ -93,6 +166,13 @@ export const initPlayerSocket = (io: Server): void => {
 
           await session.save();
 
+          // Simpan reconnect data di Redis
+          await setJSON(
+            keys.playerReconnect(upperToken, username.trim()),
+            { token: upperToken, username: username.trim(), avatarEmoji: "🦊" },
+            TTL.RECONNECT_DATA
+          );
+
           // Join room
           const room = `session:${upperToken}`;
           socket.join(room);
@@ -105,6 +185,9 @@ export const initPlayerSocket = (io: Server): void => {
           socket.emit("session:joined", {
             sessionId: session._id,
             token: upperToken,
+            reconnected: false,
+            status: session.status,
+            currentQuestion: session.currentQuestion,
             participants: session.participants.map((p) => ({
               username: p.username,
               avatar: p.avatar,
@@ -130,10 +213,8 @@ export const initPlayerSocket = (io: Server): void => {
             })),
           };
 
-          // Broadcast ke semua player di room (root namespace)
+          // Broadcast ke semua player di room
           io.to(room).emit("session:playerJoined", joinPayload);
-
-          // Notify admin namespace too
           io.of("/admin").to(room).emit("session:playerJoined", joinPayload);
 
           console.log(`✅ ${username} bergabung ke sesi ${upperToken} (total: ${connectedCount})`);
@@ -171,6 +252,13 @@ export const initPlayerSocket = (io: Server): void => {
           };
 
           await session.save();
+
+          // Update data reconnect di Redis dengan avatar baru
+          await setJSON(
+            keys.playerReconnect(sessionToken, participant.username),
+            { token: sessionToken, username: participant.username, avatarEmoji: data.emoji },
+            TTL.RECONNECT_DATA
+          );
 
           const room = `session:${sessionToken}`;
 
@@ -218,7 +306,7 @@ export const initPlayerSocket = (io: Server): void => {
           const username = (socket as any).username;
           if (!sessionToken) return;
 
-          // Cek status session sebelum proses (anti-cheat: jangan proses jika sudah selesai)
+          // Cek status session sebelum proses
           const preCheck = await Session.findOne({ token: sessionToken });
           if (!preCheck || preCheck.status === "finished" || preCheck.status === "canceled") {
             return;
@@ -236,7 +324,7 @@ export const initPlayerSocket = (io: Server): void => {
           socket.emit("player:answerReceived", {
             questionIndex: data.questionIndex,
             answer: data.answer,
-            isCorrect: null, // Belum reveal dulu
+            isCorrect: null,
             pointsEarned: null,
           });
 
@@ -261,10 +349,7 @@ export const initPlayerSocket = (io: Server): void => {
 
           console.log(`📝 ${username} menjawab soal ${data.questionIndex}: ${data.answer} (${isCorrect ? "✅" : "❌"} +${pointsEarned})`);
 
-          // ─── CRITICAL FIX: Cek apakah semua sudah menjawab ───────
-          // Ini adalah fix utama untuk mencegah quiz freeze.
-          // Jika SEMUA player yang terhubung sudah jawab soal ini,
-          // langsung end question tanpa harus tunggu timer server habis.
+          // Cek apakah semua sudah menjawab (auto-finish)
           await checkAndAutoFinish(sessionToken, data.questionIndex, io);
 
         } catch (error) {
@@ -290,6 +375,18 @@ export const initPlayerSocket = (io: Server): void => {
         if (participant) {
           participant.isConnected = false;
           await session.save();
+
+          // Refresh reconnect data di Redis (perpanjang TTL saat disconnect)
+          // Ini memberi ~90 detik untuk user reconnect sebelum data dihapus
+          await setJSON(
+            keys.playerReconnect(sessionToken, participant.username),
+            {
+              token: sessionToken,
+              username: participant.username,
+              avatarEmoji: participant.avatar?.emoji || "🦊",
+            },
+            TTL.RECONNECT_DATA
+          );
 
           const room = `session:${sessionToken}`;
           const connectedCount = session.participants.filter((p) => p.isConnected).length;

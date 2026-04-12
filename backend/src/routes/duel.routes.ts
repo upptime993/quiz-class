@@ -117,4 +117,78 @@ router.get("/:token/info", async (req: Request, res: Response) => {
   }
 });
 
+// ─── GET /api/duel/:token/state ─────────────────────────────────
+// Endpoint publik untuk cek state duel — dipakai frontend saat reconnect/refresh
+router.get("/:token/state", async (req: Request, res: Response) => {
+  try {
+    const upperToken = req.params.token.toUpperCase();
+    const room = await DuelRoom.findOne({ token: upperToken }).populate("quizId", "title totalQuestions");
+
+    if (!room) {
+      res.status(404).json({ success: false, message: "Room tidak ditemukan" });
+      return;
+    }
+
+    const usernameQuery = (req.query.username as string || "").trim().toLowerCase();
+
+    // Tentukan role dari username
+    let role: "creator" | "opponent" | null = null;
+    if (usernameQuery) {
+      if (room.creator.username.toLowerCase() === usernameQuery) role = "creator";
+      else if (room.opponent && room.opponent.username.toLowerCase() === usernameQuery) role = "opponent";
+    }
+
+    // Ambil soal aktif jika game sedang berjalan
+    let currentQuestionData = null;
+    if (room.status === "active") {
+      const quiz = await Quiz.findById(room.quizId);
+      if (quiz) {
+        const q = quiz.questions[room.currentQuestion];
+        if (q) {
+          currentQuestionData = {
+            order: room.currentQuestion + 1,
+            text: q.text,
+            imageUrl: q.imageUrl || null,
+            answerType: q.answerType || "multiple_choice",
+            options: (q.answerType === "text" || q.answerType === "matching") ? [] : q.options,
+            matchPairs: q.answerType === "matching" ? (q.matchPairs || []) : [],
+            duration: room.customDuration ?? q.duration,
+            totalQuestions: quiz.questions.length,
+          };
+        }
+      }
+    }
+
+    const quiz = room.quizId as any;
+    res.json({
+      success: true,
+      data: {
+        token: room.token,
+        status: room.status,
+        currentQuestion: room.currentQuestion,
+        currentQuestionData,
+        quizTitle: quiz?.title || "Quiz",
+        totalQuestions: quiz?.totalQuestions || 0,
+        creator: {
+          username: room.creator.username,
+          avatar: room.creator.avatar,
+          score: room.creator.score,
+          isConnected: room.creator.isConnected,
+        },
+        opponent: room.opponent ? {
+          username: room.opponent.username,
+          avatar: room.opponent.avatar,
+          score: room.opponent.score,
+          isConnected: room.opponent.isConnected,
+        } : null,
+        // Info untuk user yang sedang reconnect
+        myRole: role,
+        isRegistered: !!role,
+      },
+    });
+  } catch {
+    res.status(500).json({ success: false, message: "Server error" });
+  }
+});
+
 export default router;

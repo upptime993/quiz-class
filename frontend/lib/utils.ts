@@ -62,8 +62,10 @@ export const getPlayerSocket = (): Socket => {
     playerSocket = io(SOCKET_URL, {
       transports: ["websocket", "polling"],
       reconnection: true,
-      reconnectionAttempts: 5,
-      reconnectionDelay: 1000,
+      reconnectionAttempts: Infinity,   // Terus coba sampai berhasil
+      reconnectionDelay: 500,           // Mulai dari 500ms
+      reconnectionDelayMax: 5000,       // Max 5 detik antar retry
+      timeout: 10000,
     });
   }
   return playerSocket;
@@ -108,8 +110,10 @@ export const getDuelSocket = (): Socket => {
     duelSocket = io(`${SOCKET_URL}/duel`, {
       transports: ["websocket", "polling"],
       reconnection: true,
-      reconnectionAttempts: 5,
-      reconnectionDelay: 1000,
+      reconnectionAttempts: Infinity,   // Terus coba sampai berhasil
+      reconnectionDelay: 500,
+      reconnectionDelayMax: 5000,
+      timeout: 10000,
     });
   }
   return duelSocket;

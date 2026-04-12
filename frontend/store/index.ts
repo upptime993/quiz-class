@@ -28,6 +28,8 @@ interface PlayerStore extends PlayerState {
   setScore: (score: number) => void;
   setCurrentAnswer: (answer: string | null) => void;
   setIsAnswered: (v: boolean) => void;
+  // Simpan token terakhir untuk session recovery saat refresh
+  setLastSessionToken: (token: string) => void;
   resetPlayer: () => void;
   logout: () => void;
 }
@@ -42,6 +44,7 @@ export const usePlayerStore = create<PlayerStore>()(
       score: 0,
       currentAnswer: null,
       isAnswered: false,
+      lastSessionToken: "",
 
       setUsername: (username) => set({ username }),
       setToken: (token) => set({ token }),
@@ -50,6 +53,7 @@ export const usePlayerStore = create<PlayerStore>()(
       setScore: (score) => set({ score }),
       setCurrentAnswer: (currentAnswer) => set({ currentAnswer }),
       setIsAnswered: (isAnswered) => set({ isAnswered }),
+      setLastSessionToken: (lastSessionToken) => set({ lastSessionToken }),
       resetPlayer: () =>
         set({
           username: "",
@@ -59,6 +63,7 @@ export const usePlayerStore = create<PlayerStore>()(
           score: 0,
           currentAnswer: null,
           isAnswered: false,
+          // lastSessionToken TIDAK direset — tetap untuk recovery
         }),
       logout: () =>
         set({
@@ -69,6 +74,7 @@ export const usePlayerStore = create<PlayerStore>()(
           score: 0,
           currentAnswer: null,
           isAnswered: false,
+          lastSessionToken: "",
         }),
     }),
     {

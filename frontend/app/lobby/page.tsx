@@ -20,7 +20,7 @@ import { useFloatingReactions } from "@/hooks/useQuiz";
 
 export default function LobbyPage() {
   const router = useRouter();
-  const { username, token, avatar } = usePlayerStore();
+  const { username, token, avatar, setLastSessionToken } = usePlayerStore();
   const {
     status,
     countdown,
@@ -135,13 +135,14 @@ export default function LobbyPage() {
       }
     });
 
-    // Soal dimulai → ke halaman quiz
+    // Soal dimulai → ke halaman quiz dengan URL token
     socket.on("session:questionStart", (data: any) => {
       setCurrentQuestion(data.question);
       setQuestionIndex(data.questionIndex);
       setAnsweredCount(0);
       setResult(null);
-      router.push("/quiz");
+      setLastSessionToken(token);
+      router.push(`/quiz/${token}`);
     });
 
     socket.on("session:error", (data: { message: string }) => {

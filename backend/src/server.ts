@@ -17,6 +17,9 @@ import { initPlayerSocket } from "./socket/player.socket";
 import { initAdminSocket } from "./socket/admin.socket";
 import { initDuelSocket } from "./socket/duel.socket";
 
+// Redis
+import { getRedis, closeRedis } from "./services/redis.service";
+
 dotenv.config();
 
 const app = express();
@@ -109,6 +112,13 @@ const seedDefaultAdmin = async () => {
 // ─── Start Server ────────────────────────────────────────────
 const PORT = process.env.PORT || 5000;
 
+// Init Redis (non-blocking — game tetap berjalan jika Redis tidak tersedia)
+try {
+  getRedis();
+} catch (e) {
+  console.error("❌ Redis gagal init (game still works, reconnect disabled):", e);
+}
+
 connectDB().then(() => {
   httpServer.listen(PORT, () => {
     console.log(`
@@ -128,6 +138,7 @@ connectDB().then(() => {
 process.on("SIGTERM", async () => {
   console.log("⏳ Server shutting down...");
   await mongoose.connection.close();
+  await closeRedis();
   process.exit(0);
 });
 

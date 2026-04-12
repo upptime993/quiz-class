@@ -2,6 +2,7 @@ import { Server, Socket } from "socket.io";
 import DuelRoom, { IDuelRoom } from "../models/DuelRoom.model";
 import Quiz from "../models/Quiz.model";
 import { calculateScore } from "../services/game.service";
+import { setJSON, getJSON, delKey, keys, TTL } from "../services/redis.service";
 
 const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -173,6 +174,13 @@ export const initDuelSocket = (io: Server): void => {
           }
 
           await room.save();
+
+          // Simpan data reconnect di Redis
+          await setJSON(
+            keys.duelReconnect(upperToken, username),
+            { token: upperToken, username, role },
+            TTL.RECONNECT_DATA
+          );
 
           const duelRoom = `duel:${upperToken}`;
           socket.join(duelRoom);
@@ -481,6 +489,15 @@ export const initDuelSocket = (io: Server): void => {
         }
 
         await room.save();
+
+        // Simpan data reconnect di Redis (TTL 90 detik)
+        if (username) {
+          await setJSON(
+            keys.duelReconnect(token, username),
+            { token, username, role },
+            TTL.RECONNECT_DATA
+          );
+        }
 
         emitToRoom(io, token, "duel:opponentLeft", {
           username,

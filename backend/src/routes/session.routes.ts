@@ -4,6 +4,7 @@ import Quiz from "../models/Quiz.model";
 import { authMiddleware } from "../middleware/auth.middleware";
 import { generateToken } from "../services/token.service";
 import { getLeaderboard } from "../services/game.service";
+import { getJSON, keys } from "../services/redis.service";
 
 const router = Router();
 
@@ -87,6 +88,72 @@ router.post("/create", authMiddleware, async (req: Request, res: Response) => {
       success: false,
       message: error.message || "Server error",
     });
+  }
+});
+
+// ─── GET /api/session/:token/state ────────────────────────────────
+// Endpoint publik untuk cek state session — dipakai frontend saat reconnect/refresh
+router.get("/:token/state", async (req: Request, res: Response) => {
+  try {
+    const upperToken = req.params.token.toUpperCase();
+    const session = await Session.findOne({ token: upperToken });
+
+    if (!session) {
+      res.status(404).json({ success: false, message: "Sesi tidak ditemukan" });
+      return;
+    }
+
+    // Cek username dari query param — untuk tahu apakah user ini sudah terdaftar
+    const usernameQuery = (req.query.username as string || "").trim().toLowerCase();
+    const participant = usernameQuery
+      ? session.participants.find((p) => p.username.toLowerCase() === usernameQuery)
+      : null;
+
+    // Ambil data soal aktif dari Quiz jika sedang active
+    let currentQuestionData = null;
+    if (session.status === "active" || session.status === "between" || session.status === "showing_result") {
+      const quiz = await Quiz.findById(session.quizId);
+      if (quiz) {
+        const q = quiz.questions[session.currentQuestion];
+        if (q) {
+          currentQuestionData = {
+            order: session.currentQuestion + 1,
+            text: q.text,
+            imageUrl: q.imageUrl || null,
+            answerType: q.answerType || "multiple_choice",
+            options: (q.answerType === "text" || q.answerType === "matching") ? [] : q.options,
+            matchPairs: q.answerType === "matching" ? (q.matchPairs || []) : [],
+            duration: q.duration,
+            totalQuestions: quiz.questions.length,
+          };
+        }
+      }
+    }
+
+    res.json({
+      success: true,
+      data: {
+        token: session.token,
+        status: session.status,
+        currentQuestion: session.currentQuestion,
+        currentQuestionData,
+        participantCount: session.participants.filter((p) => p.isConnected).length,
+        totalParticipants: session.participants.length,
+        // Info khusus untuk participant yang sedang reconnect
+        participantInfo: participant ? {
+          username: participant.username,
+          avatar: participant.avatar,
+          score: participant.score,
+          answeredCurrentQuestion: participant.answers.some(
+            (a) => a.questionIndex === session.currentQuestion
+          ),
+          isConnected: participant.isConnected,
+        } : null,
+        isRegistered: !!participant,
+      },
+    });
+  } catch {
+    res.status(500).json({ success: false, message: "Server error" });
   }
 });
 

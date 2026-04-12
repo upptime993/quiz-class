@@ -1,6 +1,7 @@
 import Session, { ISession, IParticipant } from "../models/Session.model";
 import Quiz, { IQuestion } from "../models/Quiz.model";
 import { Server } from "socket.io";
+import { acquireLock, setJSON, getJSON, keys, TTL } from "./redis.service";
 
 // Helper: emit to both root namespace AND /admin namespace
 const emitToAll = (io: Server, room: string, event: string, data: any) => {
@@ -171,7 +172,6 @@ export const processAnswer = async (
 };
 
 // ─── Check & Auto-Finish jika semua sudah jawab ───────────────
-// Dipanggil setelah setiap player menjawab — ini yang mencegah freeze
 export const checkAndAutoFinish = async (
   sessionToken: string,
   questionIndex: number,
@@ -190,7 +190,6 @@ export const checkAndAutoFinish = async (
 
   if (allAnswered) {
     console.log(`✅ Semua player sudah jawab soal ${questionIndex}, langsung lanjut!`);
-    // Hentikan timer soal dengan force end question sekarang
     await endQuestion(sessionToken, questionIndex, io);
     return true;
   }
@@ -250,6 +249,24 @@ export const sendQuestion = async (
   const room = `session:${sessionToken}`;
   const questionDuration = question.duration;
 
+  // Simpan state soal aktif di Redis untuk reconnect
+  await setJSON(
+    keys.sessionState(sessionToken),
+    {
+      status: "active",
+      currentQuestion: questionIndex,
+      questionDuration,
+      questionText: question.text,
+      questionImageUrl: question.imageUrl || null,
+      answerType: question.answerType || "multiple_choice",
+      options: (question.answerType === "text" || question.answerType === "matching") ? [] : question.options,
+      matchPairs: question.answerType === "matching" ? (question.matchPairs || []) : [],
+      totalQuestions: quiz.questions.length,
+      questionStartedAt: Date.now(),
+    },
+    TTL.SESSION_STATE
+  );
+
   // Kirim soal ke semua peserta (TANPA jawaban benar!)
   emitToAll(io, room, "session:questionStart", {
     question: {
@@ -265,8 +282,7 @@ export const sendQuestion = async (
     questionIndex,
   });
 
-  // ─── Server-Side Timer: emit setiap detik ke semua client ───
-  // Ini memastikan timer SINKRON di seluruh device, bukan bergantung pada clock lokal masing-masing
+  // ─── Server-Side Timer ────────────────────────────────────────
   let timeLeft = questionDuration;
   const timerInterval = setInterval(async () => {
     timeLeft--;
@@ -279,19 +295,17 @@ export const sendQuestion = async (
     }
 
     if (timeLeft > 0) {
-      // Emit timer update ke semua client di room
       emitToAll(io, room, "session:timerUpdate", {
         remaining: timeLeft,
         questionIndex,
       });
     } else {
-      // Timer habis — hentikan interval
       clearInterval(timerInterval);
 
-      // Cek lagi apakah session masih active (race condition guard)
+      // Cek lagi setelah timer habis (guard race condition)
       const postTimerSession = await Session.findOne({ token: sessionToken });
       if (!postTimerSession || postTimerSession.status !== "active" || postTimerSession.currentQuestion !== questionIndex) {
-        return; // Sudah di-handle (misalnya semua player sudah jawab duluan)
+        return;
       }
 
       console.log(`⏰ Timer soal ${questionIndex} habis — force end question`);
@@ -306,7 +320,18 @@ export const endQuestion = async (
   questionIndex: number,
   io: Server
 ): Promise<void> => {
-  // Gunakan findOneAndUpdate untuk atomically lock status agar tidak double-trigger
+  // ── Redis SETNX lock: mencegah double-trigger endQuestion ───
+  // Jauh lebih cepat dari MongoDB findOneAndUpdate untuk high-concurrency
+  const lockKey = keys.questionLock(sessionToken, questionIndex);
+  const locked = await acquireLock(lockKey, TTL.GAME_LOCK);
+
+  if (!locked) {
+    // Sudah ada proses lain yang handle soal ini
+    console.log(`🔒 endQuestion lock: soal ${questionIndex} sudah di-handle`);
+    return;
+  }
+
+  // Atomic update status ke showing_result
   const session = await Session.findOneAndUpdate(
     {
       token: sessionToken,
@@ -317,7 +342,7 @@ export const endQuestion = async (
     { new: true }
   );
 
-  // Guard: Jika tidak berhasil update (status sudah bukan active / soal sudah beda), abort
+  // Guard: Jika tidak berhasil update, abandon (sudah ada process lain atau status berbeda)
   if (!session) {
     return;
   }
@@ -331,6 +356,13 @@ export const endQuestion = async (
   const room = `session:${sessionToken}`;
   const leaderboard = getLeaderboard(session);
   const stats = getQuestionStats(session, questionIndex);
+
+  // Simpan state leaderboard terbaru di Redis
+  await setJSON(
+    keys.sessionState(sessionToken),
+    { status: "showing_result", currentQuestion: questionIndex },
+    TTL.SESSION_STATE
+  );
 
   // Kirim hasil ke semua peserta
   const isTextType = question.answerType === "text";
@@ -375,7 +407,7 @@ export const endQuestion = async (
   // Tunggu 5 detik untuk show result screen
   await delay(5000);
 
-  // Guard: cek session masih ada setelah delay (admin mungkin stop quiz)
+  // Guard: cek session masih ada setelah delay
   const postResultSession = await Session.findOne({ token: sessionToken });
   if (!postResultSession || postResultSession.status === "finished" || postResultSession.status === "canceled") return;
 
@@ -383,10 +415,8 @@ export const endQuestion = async (
   const isLastQuestion = nextIndex >= quiz.questions.length;
 
   if (isLastQuestion) {
-    // Quiz selesai!
     await finishQuiz(sessionToken, io);
   } else {
-    // Lanjut soal berikutnya
     postResultSession.status = "between";
     await postResultSession.save();
 
@@ -418,6 +448,13 @@ export const finishQuiz = async (
   );
 
   if (!session) return; // Sudah finished sebelumnya
+
+  // Update Redis state juga
+  await setJSON(
+    keys.sessionState(sessionToken),
+    { status: "finished" },
+    300 // Simpan 5 menit setelah selesai
+  );
 
   const room = `session:${sessionToken}`;
   const finalLeaderboard = getLeaderboard(session);
