@@ -96,9 +96,9 @@ export default function AvatarPage() {
         mixImageUrl: localAvatar.mixImageUrl || null,
       });
 
-      // Navigasi ke halaman quiz dengan URL session — untuk reconnect support
+      // Navigasi ke halaman lobby dengan form query token
       setLastSessionToken(token);
-      router.push(`/quiz/${token}`);
+      router.push(`/lobby?token=${token}`);
     } catch {
       showToast("Gagal menyimpan avatar, coba lagi!", "error");
       setIsJoining(false);

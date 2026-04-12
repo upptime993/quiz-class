@@ -39,6 +39,7 @@ export default function TokenQuizPage() {
   const [textAnswer, setTextAnswer] = useState("");
   const [reconnecting, setReconnecting] = useState(true);
   const [isSocketReconnecting, setIsSocketReconnecting] = useState(false);
+  const [isTransitioning, setIsTransitioning] = useState(false);
 
   const answerTimeRef = useRef<number>(Date.now());
   const submittedRef = useRef(false);
@@ -97,6 +98,11 @@ export default function TokenQuizPage() {
         }
 
         // Restore state dari API
+        if (data.status === "waiting") {
+          router.replace(`/lobby?token=${effectiveToken}`);
+          return;
+        }
+
         if (data.currentQuestionData && data.status === "active") {
           setCurrentQuestion(data.currentQuestionData);
           setQuestionIndex(data.currentQuestion);
@@ -232,7 +238,10 @@ export default function TokenQuizPage() {
       });
 
       setStatus("showing_result");
-      window.location.href = `/result?token=${effectiveToken}`;
+      setIsTransitioning(true);
+      setTimeout(() => {
+        window.location.href = `/result?token=${effectiveToken}`;
+      }, 800);
     });
 
     socket.on("session:nextQuestion", () => {
@@ -246,7 +255,10 @@ export default function TokenQuizPage() {
       timer.stop();
       setFinalLeaderboard(data.finalLeaderboard);
       setStatus("finished");
-      window.location.href = `/winner?token=${effectiveToken}`;
+      setIsTransitioning(true);
+      setTimeout(() => {
+        window.location.href = `/winner?token=${effectiveToken}`;
+      }, 1500);
     });
 
     socket.on("session:countdown", (data: { count: number | string }) => {
@@ -391,6 +403,17 @@ export default function TokenQuizPage() {
           remaining={timer.remaining}
           total={duration}
         />
+
+        {/* Transition / Finishing Overlay */}
+        {isTransitioning && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 backdrop-blur-sm" style={{ background: "rgba(10,10,15,0.9)" }}>
+            <div className="w-full max-w-xs p-6 rounded-3xl text-center flex flex-col items-center" style={{ border: "1px solid rgba(0,184,148,0.3)", background: "rgba(0,184,148,0.05)" }}>
+              <div className="w-16 h-16 border-4 border-green-400/20 border-t-green-400 rounded-full animate-spin mb-4" />
+              <h3 className="text-xl font-black text-white mb-2" style={{ fontFamily: "var(--font-heading)" }}>Selesai!</h3>
+              <p className="text-sm opacity-80 text-white font-medium">Menyesuaikan hasil akhir...</p>
+            </div>
+          </div>
+        )}
       </div>
     );
   }
@@ -623,6 +646,16 @@ export default function TokenQuizPage() {
             <div className="w-16 h-16 border-4 border-white/20 border-t-white rounded-full animate-spin mb-4" />
             <h3 className="text-xl font-black text-white" style={{ fontFamily: "var(--font-heading)" }}>Mengembalikan Jaringan...</h3>
             <p className="text-sm opacity-50 text-white mt-1">Sinyal terputus. Menyambung kembali ke quiz.</p>
+          </div>
+        </div>
+      )}
+      {/* Transition / Finishing overlay */}
+      {isTransitioning && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 backdrop-blur-sm" style={{ background: "rgba(10,10,15,0.9)" }}>
+          <div className="w-full max-w-xs p-6 rounded-3xl text-center flex flex-col items-center" style={{ border: "1px solid rgba(0,184,148,0.3)", background: "rgba(0,184,148,0.05)" }}>
+            <div className="w-16 h-16 border-4 border-green-400/20 border-t-green-400 rounded-full animate-spin mb-4" />
+            <h3 className="text-xl font-black text-white mb-2" style={{ fontFamily: "var(--font-heading)" }}>Selesai!</h3>
+            <p className="text-sm opacity-80 text-white font-medium">Menunggu halaman hasil...</p>
           </div>
         </div>
       )}

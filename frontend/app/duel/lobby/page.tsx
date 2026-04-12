@@ -83,7 +83,7 @@ function DuelLobbyContent() {
         useDuelStore.getState().setCurrentQuestion(data.currentQuestion);
         useDuelStore.getState().setQuestionIndex(data.questionIndex);
         useDuelStore.getState().setResult(null);
-        router.replace("/duel/quiz");
+        router.replace(`/duel/${activeToken}/quiz`);
       }
     });
 
@@ -102,7 +102,7 @@ function DuelLobbyContent() {
       useDuelStore.getState().setCurrentQuestion(data.question);
       useDuelStore.getState().setQuestionIndex(data.questionIndex);
       useDuelStore.getState().setResult(null);
-      router.push("/duel/quiz");
+      router.push(`/duel/${activeToken}/quiz`);
     });
 
     socket.on("duel:finished", (data: any) => {
