@@ -265,6 +265,78 @@ router.get("/:id", authMiddleware, async (req: Request, res: Response) => {
   }
 });
 
+// ─── Helper: Normalisasi format soal dari format lama ────────
+// Format lama (dari input manual): { A: "...", B: "...", C: "...", D: "...", correct: "A" }
+// Format baru (schema): { options: [{label: "A", text: "..."}], correctAnswer: "A" }
+const normalizeQuestions = (questions: any[]): any[] => {
+  if (!Array.isArray(questions)) return [];
+
+  return questions.map((q: any, index: number) => {
+    // Jika sudah format baru (ada options array), langsung return
+    if (Array.isArray(q.options) && q.options.length > 0 && q.correctAnswer !== undefined) {
+      return {
+        order: q.order || index + 1,
+        text: q.text || "",
+        imageUrl: q.imageUrl || null,
+        duration: q.duration || 20,
+        answerType: q.answerType || "multiple_choice",
+        options: q.options,
+        correctAnswer: q.correctAnswer,
+        acceptedAnswers: q.acceptedAnswers || [],
+        matchPairs: q.matchPairs || [],
+        points: q.points || 1000,
+      };
+    }
+
+    // Deteksi format lama: ada key A, B, C, D dan correct
+    if ((q.A !== undefined || q.B !== undefined) && (q.correct !== undefined || q.correctAnswer !== undefined)) {
+      const correctLabel = (q.correct || q.correctAnswer || "A").toUpperCase();
+      const options = [
+        { label: "A", text: q.A || q.a || "" },
+        { label: "B", text: q.B || q.b || "" },
+        { label: "C", text: q.C || q.c || "" },
+        { label: "D", text: q.D || q.d || "" },
+      ].filter((opt) => opt.text.trim() !== "");
+
+      // Pastikan ada minimal 4 opsi — isi yang kosong jika kurang
+      while (options.length < 4) {
+        const labels = ["A", "B", "C", "D"];
+        const existingLabels = options.map((o) => o.label);
+        const missing = labels.find((l) => !existingLabels.includes(l));
+        if (missing) options.push({ label: missing, text: "(kosong)" });
+        else break;
+      }
+
+      return {
+        order: q.order || index + 1,
+        text: q.text || q.question || "",
+        imageUrl: q.imageUrl || null,
+        duration: q.duration || 20,
+        answerType: "multiple_choice",
+        options,
+        correctAnswer: correctLabel,
+        acceptedAnswers: [],
+        matchPairs: [],
+        points: q.points || 1000,
+      };
+    }
+
+    // Fallback: return as-is (mungkin sudah valid atau format tidak dikenal)
+    return {
+      order: q.order || index + 1,
+      text: q.text || "",
+      imageUrl: q.imageUrl || null,
+      duration: q.duration || 20,
+      answerType: q.answerType || "multiple_choice",
+      options: q.options || [],
+      correctAnswer: q.correctAnswer || "A",
+      acceptedAnswers: q.acceptedAnswers || [],
+      matchPairs: q.matchPairs || [],
+      points: q.points || 1000,
+    };
+  });
+};
+
 // ─── POST /api/quiz ───────────────────────────────────────────
 router.post("/", authMiddleware, async (req: Request, res: Response) => {
   try {
@@ -275,12 +347,15 @@ router.post("/", authMiddleware, async (req: Request, res: Response) => {
       return;
     }
 
+    // Normalisasi format soal (support format lama A/B/C/D maupun format baru)
+    const normalizedQuestions = normalizeQuestions(questions || []);
+
     const quiz = await Quiz.create({
       adminId: (req as any).adminId,
       title,
       description: description || "",
       defaultDuration: defaultDuration || 20,
-      questions: questions || [],
+      questions: normalizedQuestions,
     });
 
     res.status(201).json({
@@ -313,7 +388,7 @@ router.put("/:id", authMiddleware, async (req: Request, res: Response) => {
     if (req.body.title !== undefined) quiz.title = req.body.title;
     if (req.body.description !== undefined) quiz.description = req.body.description;
     if (req.body.defaultDuration !== undefined) quiz.defaultDuration = req.body.defaultDuration;
-    if (req.body.questions !== undefined) quiz.questions = req.body.questions;
+    if (req.body.questions !== undefined) quiz.questions = normalizeQuestions(req.body.questions);
     if (req.body.allow1v1 !== undefined) quiz.allow1v1 = req.body.allow1v1;
 
     await quiz.save();

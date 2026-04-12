@@ -1,7 +1,7 @@
 import { Server, Socket } from "socket.io";
 import Session from "../models/Session.model";
 import { validateToken } from "../services/token.service";
-import { processAnswer, getLeaderboard } from "../services/game.service";
+import { processAnswer, getLeaderboard, checkAndAutoFinish } from "../services/game.service";
 
 export const initPlayerSocket = (io: Server): void => {
   io.on("connection", (socket: Socket) => {
@@ -34,7 +34,37 @@ export const initPlayerSocket = (io: Server): void => {
             return;
           }
 
-          // Cek username sudah dipakai belum
+          // Guard: jangan izinkan join jika session sudah selesai
+          if (session.status === "finished" || session.status === "canceled") {
+            socket.emit("session:error", {
+              message: "Sesi sudah selesai atau dibatalkan",
+            });
+            return;
+          }
+
+          // Cek apakah socket sudah pernah join (reconnect scenario)
+          const existingBySocket = session.participants.find(
+            (p) => p.socketId === socket.id
+          );
+          if (existingBySocket) {
+            // Sudah terdaftar dengan socket ini, hanya perlu join room
+            const room = `session:${upperToken}`;
+            socket.join(room);
+            (socket as any).sessionToken = upperToken;
+            (socket as any).username = existingBySocket.username;
+            socket.emit("session:joined", {
+              sessionId: session._id,
+              token: upperToken,
+              participants: session.participants.map((p) => ({
+                username: p.username,
+                avatar: p.avatar,
+                isConnected: p.isConnected,
+              })),
+            });
+            return;
+          }
+
+          // Cek username sudah dipakai belum (dan terhubung)
           const usernameExists = session.participants.some(
             (p) => p.username.toLowerCase() === username.toLowerCase() && p.isConnected
           );
@@ -82,8 +112,7 @@ export const initPlayerSocket = (io: Server): void => {
             })),
           });
 
-          // Broadcast ke semua player di room (root namespace)
-          io.to(room).emit("session:playerJoined", {
+          const joinPayload = {
             username: username.trim(),
             avatar: {
               emoji: "🦊",
@@ -99,28 +128,13 @@ export const initPlayerSocket = (io: Server): void => {
               joinedAt: p.joinedAt,
               isConnected: p.isConnected,
             })),
-          });
+          };
 
-          // CRITICAL FIX: Also notify admin namespace ───────
-          // Admin sockets are in /admin namespace and cannot receive
-          // events from root namespace even if they joined the same room name.
-          io.of("/admin").to(room).emit("session:playerJoined", {
-            username: username.trim(),
-            avatar: {
-              emoji: "🦊",
-              mixEmoji: null,
-              mixImageUrl: null,
-            },
-            participantCount: connectedCount,
-            participants: session.participants.map((p) => ({
-              username: p.username,
-              avatar: p.avatar,
-              score: p.score || 0,
-              answers: p.answers || [],
-              joinedAt: p.joinedAt,
-              isConnected: p.isConnected,
-            })),
-          });
+          // Broadcast ke semua player di room (root namespace)
+          io.to(room).emit("session:playerJoined", joinPayload);
+
+          // Notify admin namespace too
+          io.of("/admin").to(room).emit("session:playerJoined", joinPayload);
 
           console.log(`✅ ${username} bergabung ke sesi ${upperToken} (total: ${connectedCount})`);
         } catch (error) {
@@ -160,13 +174,11 @@ export const initPlayerSocket = (io: Server): void => {
 
           const room = `session:${sessionToken}`;
 
-          // Notify players
           io.to(room).emit("session:avatarUpdated", {
             username: participant.username,
             avatar: participant.avatar,
           });
 
-          // Notify admin namespace too
           io.of("/admin").to(room).emit("session:avatarUpdated", {
             username: participant.username,
             avatar: participant.avatar,
@@ -184,17 +196,13 @@ export const initPlayerSocket = (io: Server): void => {
       if (!sessionToken || !username) return;
 
       const room = `session:${sessionToken}`;
-      io.to(room).emit("session:reaction", {
+      const reactionPayload = {
         username,
         emoji: data.emoji,
         id: `${socket.id}-${Date.now()}`,
-      });
-      // Also to admin
-      io.of("/admin").to(room).emit("session:reaction", {
-        username,
-        emoji: data.emoji,
-        id: `${socket.id}-${Date.now()}`,
-      });
+      };
+      io.to(room).emit("session:reaction", reactionPayload);
+      io.of("/admin").to(room).emit("session:reaction", reactionPayload);
     });
 
     // ─── SUBMIT ANSWER ───────────────────────────────────────
@@ -210,6 +218,12 @@ export const initPlayerSocket = (io: Server): void => {
           const username = (socket as any).username;
           if (!sessionToken) return;
 
+          // Cek status session sebelum proses (anti-cheat: jangan proses jika sudah selesai)
+          const preCheck = await Session.findOne({ token: sessionToken });
+          if (!preCheck || preCheck.status === "finished" || preCheck.status === "canceled") {
+            return;
+          }
+
           const { isCorrect, pointsEarned } = await processAnswer(
             sessionToken,
             socket.id,
@@ -218,7 +232,7 @@ export const initPlayerSocket = (io: Server): void => {
             data.responseTime
           );
 
-          // Konfirmasi ke player
+          // Konfirmasi ke player (jawaban diterima)
           socket.emit("player:answerReceived", {
             questionIndex: data.questionIndex,
             answer: data.answer,
@@ -226,11 +240,12 @@ export const initPlayerSocket = (io: Server): void => {
             pointsEarned: null,
           });
 
-          // Update count ke semua
+          // Fetch session terbaru untuk update count
           const session = await Session.findOne({ token: sessionToken });
           if (!session) return;
 
-          const answeredCount = session.participants.filter((p) =>
+          const connectedParticipants = session.participants.filter((p) => p.isConnected);
+          const answeredCount = connectedParticipants.filter((p) =>
             p.answers.some((a) => a.questionIndex === data.questionIndex)
           ).length;
 
@@ -238,14 +253,20 @@ export const initPlayerSocket = (io: Server): void => {
           const payload = {
             username,
             answeredCount,
-            totalParticipants: session.participants.filter((p) => p.isConnected).length,
+            totalParticipants: connectedParticipants.length,
           };
 
           io.to(room).emit("session:playerAnswered", payload);
-          // Also notify admin namespace
           io.of("/admin").to(room).emit("session:playerAnswered", payload);
 
           console.log(`📝 ${username} menjawab soal ${data.questionIndex}: ${data.answer} (${isCorrect ? "✅" : "❌"} +${pointsEarned})`);
+
+          // ─── CRITICAL FIX: Cek apakah semua sudah menjawab ───────
+          // Ini adalah fix utama untuk mencegah quiz freeze.
+          // Jika SEMUA player yang terhubung sudah jawab soal ini,
+          // langsung end question tanpa harus tunggu timer server habis.
+          await checkAndAutoFinish(sessionToken, data.questionIndex, io);
+
         } catch (error) {
           console.error("player:answer error:", error);
         }
@@ -287,7 +308,6 @@ export const initPlayerSocket = (io: Server): void => {
           };
 
           io.to(room).emit("session:playerLeft", payload);
-          // Also notify admin namespace
           io.of("/admin").to(room).emit("session:playerLeft", payload);
         }
 

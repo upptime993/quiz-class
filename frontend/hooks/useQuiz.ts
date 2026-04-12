@@ -25,6 +25,9 @@ export const useSocket = () => {
 };
 
 // ─── useTimer Hook ────────────────────────────────────────────
+// Timer ini sekarang bersifat DISPLAY-ONLY: server adalah sumber kebenaran.
+// Frontend timer bergerak secara lokal untuk tampilan mulus (smooth display),
+// tapi di-SYNC dari server setiap detik via session:timerUpdate event.
 export const useTimer = (
   duration: number,
   onTick?: (remaining: number) => void,
@@ -34,46 +37,66 @@ export const useTimer = (
   const [isRunning, setIsRunning] = useState(false);
   const intervalRef = useRef<NodeJS.Timeout | null>(null);
   const startTimeRef = useRef<number>(0);
-  // Use refs to always have latest callback versions (prevents stale closures)
+  // Gunakan ref untuk callback terbaru (mencegah stale closures)
   const onTickRef = useRef(onTick);
   const onEndRef = useRef(onEnd);
   const durationRef = useRef(duration);
+  // Track last server-synced time
+  const serverSyncRef = useRef<number | null>(null);
 
   useEffect(() => { onTickRef.current = onTick; }, [onTick]);
   useEffect(() => { onEndRef.current = onEnd; }, [onEnd]);
   useEffect(() => { durationRef.current = duration; }, [duration]);
 
   const start = useCallback(() => {
-    // Clear any existing interval
     if (intervalRef.current) clearInterval(intervalRef.current);
     const dur = durationRef.current;
     setRemaining(dur);
     setIsRunning(true);
     startTimeRef.current = Date.now();
+    serverSyncRef.current = null;
 
     intervalRef.current = setInterval(() => {
-      const elapsed = Math.floor((Date.now() - startTimeRef.current) / 1000);
-      const left = Math.max(0, dur - elapsed);
+      setRemaining((prev) => {
+        // Jika ada sync dari server, pakai nilai server sebagai patokan
+        if (serverSyncRef.current !== null) {
+          const serverVal = serverSyncRef.current;
+          serverSyncRef.current = null; // Reset setelah dipakai
+          onTickRef.current?.(serverVal);
+          if (serverVal <= 5 && serverVal > 0) soundManager.playTickBeep();
+          if (serverVal <= 0) {
+            setIsRunning(false);
+            if (intervalRef.current) clearInterval(intervalRef.current);
+            onEndRef.current?.();
+          }
+          return serverVal;
+        }
 
-      setRemaining(left);
-      onTickRef.current?.(left);
-
-      // Beep saat 5 detik terakhir
-      if (left <= 5 && left > 0) {
-        soundManager.playTickBeep();
-      }
-
-      if (left === 0) {
-        setIsRunning(false);
-        if (intervalRef.current) clearInterval(intervalRef.current);
-        onEndRef.current?.();
-      }
+        // Kalau belum ada sync, dekremen lokal
+        const left = Math.max(0, prev - 1);
+        onTickRef.current?.(left);
+        if (left <= 5 && left > 0) soundManager.playTickBeep();
+        if (left === 0) {
+          setIsRunning(false);
+          if (intervalRef.current) clearInterval(intervalRef.current);
+          onEndRef.current?.();
+        }
+        return left;
+      });
     }, 1000);
+  }, []);
+
+  // Method khusus untuk sync dari server
+  const syncFromServer = useCallback((serverRemaining: number) => {
+    serverSyncRef.current = serverRemaining;
+    // Langsung update tampilan agar tidak ada lag satu detik
+    setRemaining(serverRemaining);
   }, []);
 
   const stop = useCallback(() => {
     setIsRunning(false);
     if (intervalRef.current) clearInterval(intervalRef.current);
+    serverSyncRef.current = null;
   }, []);
 
   const reset = useCallback(() => {
@@ -90,7 +113,7 @@ export const useTimer = (
   const progress = duration > 0 ? remaining / duration : 0;
   const isLow = remaining <= 5;
 
-  return { remaining, isRunning, progress, isLow, start, stop, reset };
+  return { remaining, isRunning, progress, isLow, start, stop, reset, syncFromServer };
 };
 
 // ─── useCountdown Hook ────────────────────────────────────────

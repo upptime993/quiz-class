@@ -34,29 +34,37 @@ export default function QuizPage() {
   const [isWaiting, setIsWaiting] = useState(false);
   const [textAnswer, setTextAnswer] = useState("");
   const answerTimeRef = useRef<number>(Date.now());
-  const hasNavigatedRef = useRef(false);
+  // Ref ini TIDAK digunakan untuk blok navigasi — hanya untuk cek duplikat submit
+  const submittedRef = useRef(false);
+  // Ref ini khusus untuk blok duplikat navigasi saat session:finished
+  const finishedNavigatedRef = useRef(false);
 
   const duration = currentQuestion?.duration || 20;
   const isAnsweredRef = useRef(false);
 
-  // Keep ref in sync with store
   useEffect(() => {
     isAnsweredRef.current = isAnswered;
   }, [isAnswered]);
 
-  // Timer
-  const timer = useTimer(
-    duration,
-    undefined,
-    useCallback(() => {
-      if (!isAnsweredRef.current && !hasNavigatedRef.current) {
-        handleTimeoutRef.current?.();
-      }
-    }, [])
-  );
-  const handleTimeoutRef = useRef<(() => void) | null>(null);
+  // ─── Timer (display + sync dari server) ──────────────────────
+  const handleTimerEnd = useCallback(() => {
+    // Timer lokal habis — kalau belum jawab, kirim TIMEOUT
+    if (!isAnsweredRef.current && !submittedRef.current) {
+      submittedRef.current = true;
+      const socket = getPlayerSocket();
+      socket.emit("player:answer", {
+        questionIndex,
+        answer: "TIMEOUT",
+        responseTime: duration * 1000,
+      });
+      setIsAnswered(true);
+      setIsWaiting(true);
+    }
+  }, [questionIndex, duration, setIsAnswered]);
 
-  // Guard
+  const timer = useTimer(duration, undefined, handleTimerEnd);
+
+  // ─── Guard: redirect jika tidak ada token/question ───────────
   useEffect(() => {
     if (!token || !username) {
       router.replace("/");
@@ -68,7 +76,7 @@ export default function QuizPage() {
     }
   }, []);
 
-  // Reset state per soal
+  // ─── Reset state & mulai timer setiap soal baru ──────────────
   useEffect(() => {
     if (!currentQuestion) return;
     setSelectedAnswer(null);
@@ -76,15 +84,16 @@ export default function QuizPage() {
     setShowConfirm(false);
     setIsAnswered(false);
     setTextAnswer("");
-    hasNavigatedRef.current = false;
+    submittedRef.current = false;
     answerTimeRef.current = Date.now();
     timer.start();
   }, [currentQuestion, questionIndex]);
 
-  // Socket listeners
+  // ─── Socket listeners ─────────────────────────────────────────
   useEffect(() => {
     const socket = getPlayerSocket();
 
+    // Update jumlah player yang sudah jawab
     socket.on("session:playerAnswered", (data: {
       username: string;
       answeredCount: number;
@@ -93,8 +102,8 @@ export default function QuizPage() {
       setAnsweredCount(data.answeredCount);
     });
 
+    // Soal baru dimulai
     socket.on("session:questionStart", (data: any) => {
-      if (hasNavigatedRef.current) return;
       timer.stop();
       setCurrentQuestion(data.question);
       setQuestionIndex(data.questionIndex);
@@ -107,6 +116,17 @@ export default function QuizPage() {
       answerTimeRef.current = Date.now();
     });
 
+    // ─── SYNC TIMER DARI SERVER ────────────────────────────────
+    // Setiap detik, server mengirim remaining time.
+    // Ini memastikan semua device punya timer yang sinkron.
+    socket.on("session:timerUpdate", (data: { remaining: number; questionIndex: number }) => {
+      // Hanya sync jika soal yang relevan masih aktif
+      if (data.questionIndex === questionIndex) {
+        timer.syncFromServer(data.remaining);
+      }
+    });
+
+    // Hasil jawaban personal (dikirim setelah endQuestion)
     socket.on("session:myResult", (data: {
       isCorrect: boolean;
       pointsEarned: number;
@@ -115,8 +135,6 @@ export default function QuizPage() {
       responseTime: number;
       leaderboard?: any[];
     }) => {
-      if (hasNavigatedRef.current) return;
-      hasNavigatedRef.current = true;
       timer.stop();
 
       if (data.leaderboard) {
@@ -133,20 +151,30 @@ export default function QuizPage() {
       });
 
       setStatus("showing_result");
-      router.push("/result");
+      // Gunakan window.location untuk navigasi yang pasti (tidak bisa di-block oleh React state)
+      window.location.href = "/result";
     });
 
+    // Soal berikutnya akan segera mulai
     socket.on("session:nextQuestion", () => {
       setStatus("between");
     });
 
+    // ─── QUIZ SELESAI ──────────────────────────────────────────
+    // CRITICAL FIX: Ini yang sebelumnya bisa terblokir oleh hasNavigatedRef.
+    // Sekarang kita gunakan ref terpisah HANYA untuk cek duplikat navigate,
+    // dan pakai window.location.href agar navigasi pasti terjadi.
     socket.on("session:finished", (data: any) => {
-      if (hasNavigatedRef.current) return;
-      hasNavigatedRef.current = true;
+      if (finishedNavigatedRef.current) return;
+      finishedNavigatedRef.current = true;
+
       timer.stop();
       setFinalLeaderboard(data.finalLeaderboard);
       setStatus("finished");
-      router.push("/winner");
+
+      // window.location.href memastikan navigasi terjadi bahkan jika
+      // React router sedang dalam state yang tidak stabil
+      window.location.href = "/winner";
     });
 
     socket.on("session:countdown", (data: { count: number | string }) => {
@@ -157,34 +185,27 @@ export default function QuizPage() {
       }
     });
 
+    // Session dibatalkan admin
+    socket.on("session:canceled", (data: any) => {
+      timer.stop();
+      alert(data.message || "Sesi dibatalkan oleh admin.");
+      window.location.href = "/";
+    });
+
     return () => {
       socket.off("session:playerAnswered");
       socket.off("session:questionStart");
+      socket.off("session:timerUpdate");
       socket.off("session:myResult");
       socket.off("session:nextQuestion");
       socket.off("session:finished");
       socket.off("session:countdown");
+      socket.off("session:canceled");
     };
-  }, []);
-
-  const handleTimeout = useCallback(() => {
-    if (hasNavigatedRef.current) return;
-    const socket = getPlayerSocket();
-    socket.emit("player:answer", {
-      questionIndex,
-      answer: "TIMEOUT",
-      responseTime: duration * 1000,
-    });
-    setIsAnswered(true);
-    setIsWaiting(true);
-  }, [questionIndex, duration]);
-
-  useEffect(() => {
-    handleTimeoutRef.current = handleTimeout;
-  }, [handleTimeout]);
+  }, [questionIndex]); // re-bind saat questionIndex berubah agar questionIndex tidak stale di handler
 
   const handleSelectAnswer = useCallback((label: string) => {
-    if (isAnswered || isWaiting) return;
+    if (isAnswered || isWaiting || submittedRef.current) return;
     setSelectedAnswer(label);
     setCurrentAnswer(label);
     soundManager.play("whoosh");
@@ -192,7 +213,8 @@ export default function QuizPage() {
   }, [isAnswered, isWaiting]);
 
   const handleConfirm = useCallback(() => {
-    if (!selectedAnswer) return;
+    if (!selectedAnswer || submittedRef.current) return;
+    submittedRef.current = true;
     setShowConfirm(false);
 
     const socket = getPlayerSocket();
@@ -217,7 +239,8 @@ export default function QuizPage() {
 
   // Handle text answer submit
   const handleSubmitTextAnswer = useCallback(() => {
-    if (isAnswered || isWaiting || !textAnswer.trim()) return;
+    if (isAnswered || isWaiting || !textAnswer.trim() || submittedRef.current) return;
+    submittedRef.current = true;
 
     const socket = getPlayerSocket();
     const responseTime = Date.now() - answerTimeRef.current;
@@ -235,7 +258,8 @@ export default function QuizPage() {
 
   // Handle matching answer submit
   const handleSubmitMatchingAnswer = useCallback((matchingResult: string) => {
-    if (isAnswered || isWaiting) return;
+    if (isAnswered || isWaiting || submittedRef.current) return;
+    submittedRef.current = true;
 
     const socket = getPlayerSocket();
     const responseTime = Date.now() - answerTimeRef.current;
@@ -320,7 +344,7 @@ export default function QuizPage() {
           </div>
 
           <div className="ml-4 pl-4 border-l border-white/10">
-            {/* Timer */}
+            {/* Timer (sinkron dari server) */}
             <TimerCircle
               remaining={timer.remaining}
               total={duration}
@@ -351,9 +375,9 @@ export default function QuizPage() {
               {answeredCount} <span className="text-white/40">/ {participantCount} selesai</span>
             </p>
           </div>
-          
+
           <div className="flex-1" />
-          
+
           {/* Mini progress */}
           <div
             className="rounded-full overflow-hidden w-16 shadow-inner"

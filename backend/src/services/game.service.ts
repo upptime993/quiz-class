@@ -8,6 +8,10 @@ const emitToAll = (io: Server, room: string, event: string, data: any) => {
   io.of("/admin").to(room).emit(event, data);
 };
 
+// ─── Helper Delay ─────────────────────────────────────────────
+const delay = (ms: number): Promise<void> =>
+  new Promise((resolve) => setTimeout(resolve, ms));
+
 // ─── Kalkulasi Score ──────────────────────────────────────────
 export const calculateScore = (
   basePoints: number,
@@ -37,7 +41,7 @@ export const getLeaderboard = (session: ISession) => {
       score: p.score,
       rank: index + 1,
       isConnected: p.isConnected,
-      answers: p.answers, // Includes detailed answers for post-quiz stats
+      answers: p.answers,
     }));
 };
 
@@ -57,7 +61,6 @@ export const getQuestionStats = (
     } else if (["A", "B", "C", "D"].includes(answer.answer)) {
       stats[answer.answer]++;
     } else {
-      // Text-type answer
       stats.text++;
     }
   });
@@ -83,6 +86,11 @@ export const processAnswer = async (
 
   if (!session) return { isCorrect: false, pointsEarned: 0, participant: null };
 
+  // GUARD: Jangan proses jawaban jika quiz sudah selesai
+  if (session.status === "finished" || session.status === "canceled") {
+    return { isCorrect: false, pointsEarned: 0, participant: null };
+  }
+
   const quiz = await Quiz.findById(session.quizId);
   if (!quiz) return { isCorrect: false, pointsEarned: 0, participant: null };
 
@@ -97,51 +105,49 @@ export const processAnswer = async (
 
   const participant = session.participants[participantIndex];
 
-  // Cek sudah jawab belum
+  // Anti-cheat: cek sudah jawab belum untuk soal ini
   const alreadyAnswered = participant.answers.some(
     (a) => a.questionIndex === questionIndex
   );
   if (alreadyAnswered)
     return { isCorrect: false, pointsEarned: 0, participant };
 
-  // Determine correctness based on answer type
+  // Tentukan kebenaran berdasarkan answer type
   let isCorrect = false;
   if (question.answerType === "text") {
-    // Case-insensitive text matching against accepted answers
     const normalizedAnswer = answer.trim().toLowerCase();
     const accepted = question.acceptedAnswers || [];
     isCorrect = accepted.some(
       (a) => a.trim().toLowerCase() === normalizedAnswer
     );
   } else if (question.answerType === "matching") {
-    // Matching: answer is "MATCHING:leftIdx:rightOrigIdx,leftIdx:rightOrigIdx,..."
     if (answer.startsWith("MATCHING:")) {
       const matchStr = answer.replace("MATCHING:", "");
       const pairs = matchStr.split(",");
       const matchPairs = question.matchPairs || [];
       let allCorrect = true;
       let validPairs = 0;
-      
+
       for (const pair of pairs) {
         const [leftIdxStr, rightOrigIdxStr] = pair.split(":");
         const leftIdx = parseInt(leftIdxStr);
         const rightOrigIdx = parseInt(rightOrigIdxStr);
-        
+
         if (isNaN(leftIdx) || isNaN(rightOrigIdx)) continue;
         validPairs++;
-        
-        // Correct if leftIdx matches rightOrigIdx (same index in matchPairs)
+
         if (leftIdx !== rightOrigIdx) {
           allCorrect = false;
           break;
         }
       }
-      
+
       isCorrect = allCorrect && validPairs === matchPairs.length;
     }
   } else {
     isCorrect = answer === question.correctAnswer;
   }
+
   const pointsEarned = isCorrect
     ? calculateScore(question.points, responseTime, question.duration)
     : 0;
@@ -162,6 +168,34 @@ export const processAnswer = async (
   await session.save();
 
   return { isCorrect, pointsEarned, participant: session.participants[participantIndex] };
+};
+
+// ─── Check & Auto-Finish jika semua sudah jawab ───────────────
+// Dipanggil setelah setiap player menjawab — ini yang mencegah freeze
+export const checkAndAutoFinish = async (
+  sessionToken: string,
+  questionIndex: number,
+  io: Server
+): Promise<boolean> => {
+  const session = await Session.findOne({ token: sessionToken });
+  if (!session || session.status !== "active") return false;
+
+  const connectedParticipants = session.participants.filter((p) => p.isConnected);
+  if (connectedParticipants.length === 0) return false;
+
+  // Cek apakah SEMUA player yang terhubung sudah jawab soal ini
+  const allAnswered = connectedParticipants.every((p) =>
+    p.answers.some((a) => a.questionIndex === questionIndex)
+  );
+
+  if (allAnswered) {
+    console.log(`✅ Semua player sudah jawab soal ${questionIndex}, langsung lanjut!`);
+    // Hentikan timer soal dengan force end question sekarang
+    await endQuestion(sessionToken, questionIndex, io);
+    return true;
+  }
+
+  return false;
 };
 
 // ─── Start Quiz ───────────────────────────────────────────────
@@ -214,6 +248,7 @@ export const sendQuestion = async (
   await session.save();
 
   const room = `session:${sessionToken}`;
+  const questionDuration = question.duration;
 
   // Kirim soal ke semua peserta (TANPA jawaban benar!)
   emitToAll(io, room, "session:questionStart", {
@@ -223,25 +258,46 @@ export const sendQuestion = async (
       imageUrl: question.imageUrl || null,
       answerType: question.answerType || "multiple_choice",
       options: (question.answerType === "text" || question.answerType === "matching") ? [] : question.options,
-      // Send matchPairs for matching type (shuffling happens on client)
       matchPairs: question.answerType === "matching" ? (question.matchPairs || []) : [],
-      duration: question.duration,
+      duration: questionDuration,
       totalQuestions: quiz.questions.length,
     },
     questionIndex,
   });
 
-  // Timer soal
-  await delay(question.duration * 1000);
+  // ─── Server-Side Timer: emit setiap detik ke semua client ───
+  // Ini memastikan timer SINKRON di seluruh device, bukan bergantung pada clock lokal masing-masing
+  let timeLeft = questionDuration;
+  const timerInterval = setInterval(async () => {
+    timeLeft--;
 
-  // Setelah timer habis, validasi kembali session untuk mencegah race condition (misal admin Force Next atau Stop)
-  const currentSession = await Session.findOne({ token: sessionToken });
-  if (!currentSession || currentSession.status !== "active" || currentSession.currentQuestion !== questionIndex) {
-    return; // Timed out tapi status sudah diubah oleh aksi lain, abort!
-  }
+    // Re-check apakah session masih active (bisa di-stop admin)
+    const currentSession = await Session.findOne({ token: sessionToken });
+    if (!currentSession || currentSession.status !== "active" || currentSession.currentQuestion !== questionIndex) {
+      clearInterval(timerInterval);
+      return;
+    }
 
-  // Lanjutkan end question
-  await endQuestion(sessionToken, questionIndex, io);
+    if (timeLeft > 0) {
+      // Emit timer update ke semua client di room
+      emitToAll(io, room, "session:timerUpdate", {
+        remaining: timeLeft,
+        questionIndex,
+      });
+    } else {
+      // Timer habis — hentikan interval
+      clearInterval(timerInterval);
+
+      // Cek lagi apakah session masih active (race condition guard)
+      const postTimerSession = await Session.findOne({ token: sessionToken });
+      if (!postTimerSession || postTimerSession.status !== "active" || postTimerSession.currentQuestion !== questionIndex) {
+        return; // Sudah di-handle (misalnya semua player sudah jawab duluan)
+      }
+
+      console.log(`⏰ Timer soal ${questionIndex} habis — force end question`);
+      await endQuestion(sessionToken, questionIndex, io);
+    }
+  }, 1000);
 };
 
 // ─── End Question ─────────────────────────────────────────────
@@ -250,21 +306,27 @@ export const endQuestion = async (
   questionIndex: number,
   io: Server
 ): Promise<void> => {
-  const session = await Session.findOne({ token: sessionToken });
-  
-  // Guard: Jangan eksekusi jika sudah selesai, batal, atau BUKAN active (mencegah multiple trigger)
-  if (!session || session.status === "finished" || session.status === "canceled") return;
-  if (session.status !== "active") return; // Hanya bisa endQuestion jika sedang active
+  // Gunakan findOneAndUpdate untuk atomically lock status agar tidak double-trigger
+  const session = await Session.findOneAndUpdate(
+    {
+      token: sessionToken,
+      status: "active",
+      currentQuestion: questionIndex,
+    },
+    { $set: { status: "showing_result" } },
+    { new: true }
+  );
+
+  // Guard: Jika tidak berhasil update (status sudah bukan active / soal sudah beda), abort
+  if (!session) {
+    return;
+  }
 
   const quiz = await Quiz.findById(session.quizId);
   if (!quiz) return;
 
   const question = quiz.questions[questionIndex];
   if (!question) return;
-
-  // Update status (Lock ke showing_result)
-  session.status = "showing_result";
-  await session.save();
 
   const room = `session:${sessionToken}`;
   const leaderboard = getLeaderboard(session);
@@ -273,7 +335,7 @@ export const endQuestion = async (
   // Kirim hasil ke semua peserta
   const isTextType = question.answerType === "text";
   const isMatchingType = question.answerType === "matching";
-  
+
   emitToAll(io, room, "session:questionEnd", {
     correctAnswer: isTextType
       ? (question.acceptedAnswers?.[0] || "")
@@ -310,10 +372,10 @@ export const endQuestion = async (
     });
   });
 
-  // Tunggu sebentar lalu cek soal berikutnya
+  // Tunggu 5 detik untuk show result screen
   await delay(5000);
 
-  // Guard pengecekan jika admin Stop Quiz saat delay
+  // Guard: cek session masih ada setelah delay (admin mungkin stop quiz)
   const postResultSession = await Session.findOne({ token: sessionToken });
   if (!postResultSession || postResultSession.status === "finished" || postResultSession.status === "canceled") return;
 
@@ -334,8 +396,8 @@ export const endQuestion = async (
     });
 
     await delay(5000);
-    
-    // Guard terakhir sebelum pindah ke sendQuestion
+
+    // Guard sebelum pindah ke sendQuestion
     const preNextSession = await Session.findOne({ token: sessionToken });
     if (!preNextSession || preNextSession.status === "finished" || preNextSession.status === "canceled") return;
 
@@ -348,21 +410,21 @@ export const finishQuiz = async (
   sessionToken: string,
   io: Server
 ): Promise<void> => {
-  const session = await Session.findOne({ token: sessionToken });
-  if (!session) return;
+  // Atomic update — prevent double-finish race condition
+  const session = await Session.findOneAndUpdate(
+    { token: sessionToken, status: { $nin: ["finished", "canceled"] } },
+    { $set: { status: "finished", finishedAt: new Date() } },
+    { new: true }
+  );
 
-  session.status = "finished";
-  session.finishedAt = new Date();
-  await session.save();
+  if (!session) return; // Sudah finished sebelumnya
 
   const room = `session:${sessionToken}`;
   const finalLeaderboard = getLeaderboard(session);
+
+  console.log(`🏆 Quiz ${sessionToken} selesai! Leaderboard: ${finalLeaderboard.length} player`);
 
   emitToAll(io, room, "session:finished", {
     finalLeaderboard,
   });
 };
-
-// ─── Helper ───────────────────────────────────────────────────
-const delay = (ms: number): Promise<void> =>
-  new Promise((resolve) => setTimeout(resolve, ms));
