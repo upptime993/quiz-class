@@ -413,18 +413,9 @@ export const initDuelSocket = (io: Server): void => {
             opponentScore: updatedRoom.opponent?.score || 0,
           });
 
-          // Pengecekan Progress State (Race Finish Line)
-          const isCreatorDone = updatedRoom.creator.answers.length >= quiz.questions.length;
-          const isOpponentDone = updatedRoom.opponent ? updatedRoom.opponent.answers.length >= quiz.questions.length : false;
-          
-          const isLastForMe = (data.questionIndex + 1) >= quiz.questions.length;
-
           if (isLastForMe) {
-            if (isCreatorDone && isOpponentDone) {
-              await finishDuel(token, io);
-            } else {
-              io.of("/duel").to(socket.id).emit("duel:waitingForOpponent");
-            }
+            // Sudden death: Siapa yg selesai quiz duluan langsung mengakhiri permainan
+            await finishDuel(token, io);
           } else {
             // Delay kosmetik singkat (1 detik) sebelum melempar soal selanjutnya ke user ini
             setTimeout(async () => {

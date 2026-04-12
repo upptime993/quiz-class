@@ -42,11 +42,10 @@ router.post("/create", async (req: Request, res: Response) => {
 
     const token = await generateToken();
 
-    const room = await DuelRoom.create({
+    const roomData: any = {
       token,
       quizId: quiz._id,
       status: "waiting",
-      customDuration: customDuration && customDuration >= 5 ? customDuration : null,
       creator: {
         socketId: "pending",
         username: username.trim(),
@@ -56,7 +55,12 @@ router.post("/create", async (req: Request, res: Response) => {
         isConnected: false,
       },
       opponent: null,
-    });
+    };
+    if (customDuration && customDuration >= 5) {
+      roomData.customDuration = customDuration;
+    }
+
+    const room = await DuelRoom.create(roomData);
 
     res.status(201).json({
       success: true,

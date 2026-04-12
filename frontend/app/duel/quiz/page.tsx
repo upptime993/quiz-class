@@ -32,7 +32,7 @@ export default function DuelQuizPage() {
   const answeredRef = useRef(false); // Ref untuk cek answered di dalam closure timer
   const sessionRestoredRef = useRef(false);
 
-  const [waitingForOpponent, setWaitingForOpponent] = useState(false);
+  const [interrupted, setInterrupted] = useState(false);
   const [isReconnecting, setIsReconnecting] = useState(false);
 
   // ─── Auto-Reconnect Listeners ─────────────────────────────
@@ -149,7 +149,7 @@ export default function DuelQuizPage() {
       setAnswered(false);
       setSelectedAnswer(null);
       setShowResult(false);
-      setWaitingForOpponent(false);
+      setInterrupted(false);
       setMatchingAnswer("");
       setTimeLeft(data.question.duration);
     };
@@ -165,12 +165,15 @@ export default function DuelQuizPage() {
         finalCreator: data.creator,
         finalOpponent: data.opponent,
       });
-      // Beri waktu 1.5 detik agar user bisa melihat feedback jawaban terakhirnya
-      setTimeout(() => router.push("/duel/winner"), 1500);
-    };
-
-    const onWaiting = () => {
-      setWaitingForOpponent(true);
+      
+      const isInterrupted = questionIndex + 1 < totalQuestions;
+      
+      if (isInterrupted) {
+         setInterrupted(true);
+         setTimeout(() => router.push("/duel/winner"), 3000);
+      } else {
+         setTimeout(() => router.push("/duel/winner"), 1500);
+      }
     };
 
     const onPlayerDisconnected = () => {
@@ -183,7 +186,6 @@ export default function DuelQuizPage() {
     socket.on("duel:questionStart", onQuestionStart);
     socket.on("duel:reaction", onReaction);
     socket.on("duel:finished", onFinished);
-    socket.on("duel:waitingForOpponent", onWaiting);
     socket.on("duel:playerDisconnected", onPlayerDisconnected);
     // Legacy support
     socket.on("duel:opponentLeft", onPlayerDisconnected);
@@ -195,7 +197,6 @@ export default function DuelQuizPage() {
       socket.off("duel:questionStart", onQuestionStart);
       socket.off("duel:reaction", onReaction);
       socket.off("duel:finished", onFinished);
-      socket.off("duel:waitingForOpponent", onWaiting);
       socket.off("duel:playerDisconnected", onPlayerDisconnected);
       socket.off("duel:opponentLeft", onPlayerDisconnected);
     };
@@ -460,19 +461,14 @@ export default function DuelQuizPage() {
         </div>
       </div>
 
-      {waitingForOpponent && (
+      {interrupted && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 backdrop-blur-sm"
           style={{ background: "rgba(10,10,15,0.85)" }}>
           <div className="w-full max-w-xs p-6 rounded-3xl text-center"
-            style={{ background: "rgba(108,92,231,0.15)", border: "1px solid rgba(108,92,231,0.3)", boxShadow: "0 0 30px rgba(108,92,231,0.2)" }}>
-            <div className="flex justify-center gap-1.5 mb-4">
-              {[0, 1, 2].map(i => (
-                <div key={i} className="w-3 h-3 rounded-full animate-bounce"
-                  style={{ background: "#A29BFE", animationDelay: `${i * 0.15}s` }} />
-              ))}
-            </div>
-            <h3 className="text-xl font-black text-white mb-2" style={{ fontFamily: "var(--font-heading)" }}>Selesai!</h3>
-            <p className="text-sm opacity-60 text-white font-medium">Menunggu lawan menyelesaikan kuis...</p>
+            style={{ background: "rgba(255,102,102,0.15)", border: "1px solid rgba(255,102,102,0.3)", boxShadow: "0 0 30px rgba(255,102,102,0.2)" }}>
+            <div className="text-4xl mb-4 animate-bounce">🚨</div>
+            <h3 className="text-xl font-black text-white mb-2" style={{ fontFamily: "var(--font-heading)" }}>Sudden Death!</h3>
+            <p className="text-sm opacity-80 text-white font-medium">Lawan telah menyelesaikan kuis lebih dulu.<br/><br/>Permainan berakhir.</p>
           </div>
         </div>
       )}
