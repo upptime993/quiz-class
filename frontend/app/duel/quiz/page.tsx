@@ -160,6 +160,12 @@ export default function DuelQuizPage() {
 
     // ─── Natural Delay pada Finish ─────────────
     const onFinished = (data: any) => {
+      // PENTING: Stop timer DULU sebelum set state apapun
+      if (timerRef.current) {
+        clearInterval(timerRef.current);
+        timerRef.current = null;
+      }
+
       setFinished({
         winner: data.winner,
         finalCreator: data.creator,
@@ -170,9 +176,10 @@ export default function DuelQuizPage() {
       
       if (isInterrupted) {
          setInterrupted(true);
-         setTimeout(() => window.location.href = "/duel/winner", 2500);
+         // Gunakan router.push (BUKAN window.location.href) agar Zustand state tetap di memori
+         setTimeout(() => router.push("/duel/winner"), 2500);
       } else {
-         setTimeout(() => window.location.href = "/duel/winner", 100);
+         setTimeout(() => router.push("/duel/winner"), 300);
       }
     };
 

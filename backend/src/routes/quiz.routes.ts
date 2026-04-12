@@ -271,19 +271,32 @@ router.get("/:id", authMiddleware, async (req: Request, res: Response) => {
 const normalizeQuestions = (questions: any[]): any[] => {
   if (!Array.isArray(questions)) return [];
 
+  // Helper: bersihkan matchPairs dari entry yang tidak valid
+  const sanitizeMatchPairs = (pairs: any[], answerType: string): any[] => {
+    // Jika bukan matching type, SELALU kosongkan matchPairs
+    if (answerType !== "matching") return [];
+    if (!Array.isArray(pairs)) return [];
+    // Filter hanya pasangan yang punya left AND right yang valid
+    return pairs.filter(
+      (p: any) => p && typeof p.left === "string" && p.left.trim() !== "" &&
+                   typeof p.right === "string" && p.right.trim() !== ""
+    );
+  };
+
   return questions.map((q: any, index: number) => {
-    // Jika sudah format baru (ada options array), langsung return
+    // Jika sudah format baru (ada options array), return dengan sanitasi
     if (Array.isArray(q.options) && q.options.length > 0 && q.correctAnswer !== undefined) {
+      const answerType = q.answerType || "multiple_choice";
       return {
         order: q.order || index + 1,
         text: q.text || "",
         imageUrl: q.imageUrl || null,
         duration: q.duration || 20,
-        answerType: q.answerType || "multiple_choice",
-        options: q.options,
+        answerType,
+        options: answerType === "text" || answerType === "matching" ? [] : q.options,
         correctAnswer: q.correctAnswer,
         acceptedAnswers: q.acceptedAnswers || [],
-        matchPairs: q.matchPairs || [],
+        matchPairs: sanitizeMatchPairs(q.matchPairs || [], answerType),
         points: q.points || 1000,
       };
     }
@@ -321,17 +334,18 @@ const normalizeQuestions = (questions: any[]): any[] => {
       };
     }
 
-    // Fallback: return as-is (mungkin sudah valid atau format tidak dikenal)
+    // Fallback: return dengan sanitasi
+    const answerType = q.answerType || "multiple_choice";
     return {
       order: q.order || index + 1,
       text: q.text || "",
       imageUrl: q.imageUrl || null,
       duration: q.duration || 20,
-      answerType: q.answerType || "multiple_choice",
-      options: q.options || [],
+      answerType,
+      options: answerType === "text" || answerType === "matching" ? [] : (q.options || []),
       correctAnswer: q.correctAnswer || "A",
       acceptedAnswers: q.acceptedAnswers || [],
-      matchPairs: q.matchPairs || [],
+      matchPairs: sanitizeMatchPairs(q.matchPairs || [], answerType),
       points: q.points || 1000,
     };
   });
