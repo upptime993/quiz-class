@@ -26,6 +26,7 @@ export interface IDuelRoom extends Document {
   creator: IDuelPlayer;
   opponent: IDuelPlayer | null;
   currentQuestion: number;
+  customDuration?: number;
   startedAt?: Date;
   finishedAt?: Date;
   expiresAt: Date;
@@ -86,6 +87,7 @@ const DuelRoomSchema = new Schema<IDuelRoom>(
     creator: { type: DuelPlayerSchema, required: true },
     opponent: { type: DuelPlayerSchema, default: null },
     currentQuestion: { type: Number, default: 0 },
+    customDuration: { type: Number, default: null },
     startedAt: Date,
     finishedAt: Date,
     expiresAt: {

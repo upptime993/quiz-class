@@ -22,7 +22,7 @@ router.get("/quizzes", async (_req: Request, res: Response) => {
 // ─── POST /api/duel/create — Buat room baru (tanpa auth) ──────
 router.post("/create", async (req: Request, res: Response) => {
   try {
-    const { quizId, username } = req.body;
+    const { quizId, username, customDuration } = req.body;
 
     if (!quizId || !username) {
       res.status(400).json({ success: false, message: "Quiz dan username wajib diisi" });
@@ -46,6 +46,7 @@ router.post("/create", async (req: Request, res: Response) => {
       token,
       quizId: quiz._id,
       status: "waiting",
+      customDuration: customDuration && customDuration >= 5 ? customDuration : null,
       creator: {
         socketId: "pending",
         username: username.trim(),

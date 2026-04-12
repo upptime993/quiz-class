@@ -74,7 +74,7 @@ const sendDuelQuestion = async (
           : question.options,
       matchPairs:
         question.answerType === "matching" ? question.matchPairs || [] : [],
-      duration: question.duration,
+      duration: room.customDuration ?? question.duration,
       totalQuestions: quiz.questions.length,
     },
     questionIndex,
@@ -195,7 +195,7 @@ export const initDuelSocket = (io: Server): void => {
                   answerType: q.answerType || "multiple_choice",
                   options: q.answerType === "text" || q.answerType === "matching" ? [] : q.options,
                   matchPairs: q.answerType === "matching" ? q.matchPairs || [] : [],
-                  duration: q.duration,
+                  duration: room.customDuration ?? q.duration,
                   totalQuestions: quiz.questions.length,
                 };
               }
@@ -352,20 +352,38 @@ export const initDuelSocket = (io: Server): void => {
           }
 
           const pointsEarned = isCorrect
-            ? calculateScore(question.points, data.responseTime, question.duration)
+            ? calculateScore(question.points, data.responseTime, room.customDuration ?? question.duration)
             : 0;
 
-          player.answers.push({
+          const playerPrefix = role === "creator" ? "creator" : "opponent";
+          const answerPayload = {
             questionIndex: data.questionIndex,
             answer: data.answer,
             isCorrect,
             responseTime: data.responseTime,
             pointsEarned,
-          });
+          };
 
-          if (isCorrect) player.score += pointsEarned;
+          const updateQuery: any = {
+            $push: { [`${playerPrefix}.answers`]: answerPayload },
+          };
+          if (pointsEarned > 0) {
+            updateQuery.$inc = { [`${playerPrefix}.score`]: pointsEarned };
+          }
 
-          await room.save();
+          const updatedRoom = await DuelRoom.findOneAndUpdate(
+            { 
+               token, 
+               [`${playerPrefix}.answers.questionIndex`]: { $ne: data.questionIndex },
+               status: { $in: ["active", "waiting", "countdown", "between"] }
+            },
+            updateQuery,
+            { new: true }
+          );
+
+          if (!updatedRoom) {
+            return;
+          }
 
           // Hitung Correct Answer untuk result feedback
           const isText = question.answerType === "text";
@@ -385,22 +403,28 @@ export const initDuelSocket = (io: Server): void => {
             answerType: question.answerType || "multiple_choice",
             matchPairs: isMatching ? question.matchPairs || [] : [],
             responseTime: data.responseTime,
-            creatorScore: room.creator.score,
-            opponentScore: room.opponent?.score || 0,
+            creatorScore: updatedRoom.creator.score,
+            opponentScore: updatedRoom.opponent?.score || 0,
           });
 
           // Update score realtime ke room
           emitToRoom(io, token, "duel:scoreUpdate", {
-            creatorScore: room.creator.score,
-            opponentScore: room.opponent?.score || 0,
+            creatorScore: updatedRoom.creator.score,
+            opponentScore: updatedRoom.opponent?.score || 0,
           });
 
           // Pengecekan Progress State (Race Finish Line)
-          const isLast = (data.questionIndex + 1) >= quiz.questions.length;
+          const isCreatorDone = updatedRoom.creator.answers.length >= quiz.questions.length;
+          const isOpponentDone = updatedRoom.opponent ? updatedRoom.opponent.answers.length >= quiz.questions.length : false;
+          
+          const isLastForMe = (data.questionIndex + 1) >= quiz.questions.length;
 
-          if (isLast) {
-            // Player Finish! Force finish for ALL!
-            await finishDuel(token, io);
+          if (isLastForMe) {
+            if (isCreatorDone && isOpponentDone) {
+              await finishDuel(token, io);
+            } else {
+              io.of("/duel").to(socket.id).emit("duel:waitingForOpponent");
+            }
           } else {
             // Delay kosmetik singkat (1 detik) sebelum melempar soal selanjutnya ke user ini
             setTimeout(async () => {
@@ -418,7 +442,7 @@ export const initDuelSocket = (io: Server): void => {
                     answerType: nextQ.answerType || "multiple_choice",
                     options: nextQ.answerType === "text" || nextQ.answerType === "matching" ? [] : nextQ.options,
                     matchPairs: nextQ.answerType === "matching" ? nextQ.matchPairs || [] : [],
-                    duration: nextQ.duration,
+                    duration: currentRoom.customDuration ?? nextQ.duration,
                     totalQuestions: quiz.questions.length,
                   },
                   questionIndex: nextQIndex,

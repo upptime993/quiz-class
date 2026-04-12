@@ -18,6 +18,7 @@ export default function DuelCreatePage() {
   const [loading, setLoading] = useState(false);
   const [loadingQuizzes, setLoadingQuizzes] = useState(true);
   const [usernameError, setUsernameError] = useState("");
+  const [customDuration, setCustomDuration] = useState<number | "">("");
 
   useEffect(() => {
     resetDuel();
@@ -44,6 +45,10 @@ export default function DuelCreatePage() {
       setUsernameError("Username minimal 2 karakter");
       return false;
     }
+    if (customDuration !== "" && (Number(customDuration) < 5 || Number(customDuration) > 300)) {
+       showToast("Waktu kustom harus 5 - 300 detik", "error");
+       return false;
+    }
     if (!selectedQuiz) {
       showToast("Pilih quiz terlebih dahulu!", "error");
       return false;
@@ -56,10 +61,14 @@ export default function DuelCreatePage() {
     if (!validate()) return;
     setLoading(true);
     try {
-      const res = await api.post("/duel/create", {
+      const payload: any = {
         quizId: selectedQuiz!._id,
         username: username.trim(),
-      });
+      };
+      if (customDuration !== "" && !isNaN(Number(customDuration))) {
+        payload.customDuration = Number(customDuration);
+      }
+      const res = await api.post("/duel/create", payload);
 
       if (res.data.success) {
         const { token, quizTitle, totalQuestions } = res.data.data;
@@ -130,6 +139,31 @@ export default function DuelCreatePage() {
                   {username.length}/20
                 </p>
               )}
+            </div>
+          </div>
+
+          {/* Custom Duration */}
+          <div className="mb-5 animate-slide-up" style={{ animationDelay: "0.12s" }}>
+            <div className="p-5 rounded-2xl" style={{
+              background: "rgba(19,19,26,0.7)",
+              border: "1px solid rgba(255,255,255,0.06)"
+            }}>
+              <h2 className="text-sm font-bold uppercase tracking-wider mb-2 opacity-60" style={{ color: "white" }}>
+                Pengaturan Waktu ⏳
+              </h2>
+              <p className="text-xs opacity-50 mb-4" style={{ color: "white" }}>
+                Ganti waktu per soal (Opsional). Kosongi untuk durasi bawaan kuis.
+              </p>
+              <InputField
+                label=""
+                placeholder="Misal: 10 (detik)"
+                type="number"
+                value={customDuration}
+                onChange={(e) => setCustomDuration(e.target.value)}
+                icon={<span style={{ fontSize: 18 }}>⏱️</span>}
+                autoComplete="off"
+                style={{ height: "52px" }}
+              />
             </div>
           </div>
 
