@@ -413,6 +413,9 @@ export const initDuelSocket = (io: Server): void => {
             opponentScore: updatedRoom.opponent?.score || 0,
           });
 
+          // Cek apakah ini soal terakhir untuk player ini
+          const isLastForMe = data.questionIndex + 1 >= quiz.questions.length;
+
           if (isLastForMe) {
             // Sudden death: Siapa yg selesai quiz duluan langsung mengakhiri permainan
             await finishDuel(token, io);
