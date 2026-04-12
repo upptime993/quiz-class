@@ -244,7 +244,7 @@ export default function TokenQuizPage() {
       setStatus("showing_result");
       setIsTransitioning(true);
       setTimeout(() => {
-        window.location.href = `/result?token=${effectiveToken}`;
+        router.push(`/result?token=${effectiveToken}`);
       }, 800);
     });
 
@@ -261,7 +261,7 @@ export default function TokenQuizPage() {
       setStatus("finished");
       setIsTransitioning(true);
       setTimeout(() => {
-        window.location.href = `/winner?token=${effectiveToken}`;
+        router.push(`/winner?token=${effectiveToken}`);
       }, 1500);
     });
 
@@ -276,7 +276,7 @@ export default function TokenQuizPage() {
     socket.on("session:canceled", (data: any) => {
       timer.stop();
       alert(data.message || "Sesi dibatalkan oleh admin.");
-      window.location.href = "/";
+      router.replace("/");
     });
 
     return () => {

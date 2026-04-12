@@ -36,7 +36,7 @@ export default function WinnerPage() {
   // Guard
   useEffect(() => {
     if (finalLeaderboard.length === 0) {
-      router.replace("/lobby");
+      router.replace("/");
       return;
     }
 
@@ -45,7 +45,7 @@ export default function WinnerPage() {
 
     soundManager.play("winner");
     runRevealSequence();
-  }, []);
+  }, [finalLeaderboard, router]);
 
   const runRevealSequence = async () => {
     // Phase 1: Intro suspense
