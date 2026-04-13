@@ -49,6 +49,7 @@ export default function TokenQuizPage() {
   const submittedRef = useRef(false);
   const finishedNavigatedRef = useRef(false);
   const hasJoinedRef = useRef(false);
+  const sessionUUIDRef = useRef<string | null>(null); // UUID untuk URL reconnect
 
   const duration = currentQuestion?.duration || 20;
   const isAnsweredRef = useRef(false);
@@ -156,6 +157,44 @@ export default function TokenQuizPage() {
 
     initQuiz();
   }, [effectiveToken, effectiveUsername]);
+
+  // ─── Tangkap UUID dari socket session:joined ──────────────────
+  // Saat join berhasil, server mengirim UUID unik yang kita simpan ke
+  // localStorage dan update URL browser ke /quiz/sessions/{uuid}
+  // Ini memungkinkan refresh tab → reconnect otomatis via URL
+  useEffect(() => {
+    const socket = getPlayerSocket();
+
+    const onJoined = (data: { sessionUUID?: string; token?: string }) => {
+      if (!data.sessionUUID) return;
+
+      sessionUUIDRef.current = data.sessionUUID;
+
+      // Simpan ke localStorage sebagai backup
+      try {
+        localStorage.setItem(
+          `quiz-session-uuid-${effectiveToken}`,
+          data.sessionUUID
+        );
+        // Juga simpan UUID global (untuk cek di halaman lain)
+        localStorage.setItem("quiz-last-uuid", data.sessionUUID);
+      } catch {}
+
+      // Update URL browser tanpa reload halaman
+      // Dari: /quiz/SQWAXX → /quiz/sessions/xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+      window.history.replaceState(
+        { sessionUUID: data.sessionUUID, token: effectiveToken },
+        "",
+        `/quiz/sessions/${data.sessionUUID}`
+      );
+    };
+
+    socket.on("session:joined", onJoined);
+    return () => {
+      socket.off("session:joined", onJoined);
+    };
+  }, [effectiveToken]);
+
   
   // ─── Socket reconnect indicator ───────────────────────────────
   useEffect(() => {

@@ -4,7 +4,7 @@ import Quiz from "../models/Quiz.model";
 import { authMiddleware } from "../middleware/auth.middleware";
 import { generateToken } from "../services/token.service";
 import { getLeaderboard } from "../services/game.service";
-import { getJSON, keys } from "../services/redis.service";
+import { getJSON, keys, setJSON, TTL } from "../services/redis.service";
 
 const router = Router();
 
@@ -88,6 +88,60 @@ router.post("/create", authMiddleware, async (req: Request, res: Response) => {
       success: false,
       message: error.message || "Server error",
     });
+  }
+});
+// ─── GET /api/session/uuid/:uuid ─────────────────────────────
+// Endpoint publik untuk resolve UUID player ke { token, username }
+// Dipakai frontend saat reconnect via URL /quiz/sessions/:uuid
+router.get("/uuid/:uuid", async (req: Request, res: Response) => {
+  try {
+    const { uuid } = req.params;
+
+    if (!uuid || uuid.length < 10) {
+      res.status(400).json({ success: false, message: "UUID tidak valid" });
+      return;
+    }
+
+    // Ambil dari Redis
+    const data = await getJSON<{ token: string; username: string }>(
+      keys.playerUUID(uuid)
+    );
+
+    if (!data) {
+      res.status(404).json({
+        success: false,
+        message: "Sesi tidak ditemukan atau sudah kedaluwarsa. Silakan join ulang.",
+      });
+      return;
+    }
+
+    // Verifikasi session masih ada di DB
+    const session = await Session.findOne({ token: data.token });
+    if (!session) {
+      res.status(404).json({
+        success: false,
+        message: "Sesi tidak ditemukan di database.",
+      });
+      return;
+    }
+
+    // Refresh TTL UUID agar tidak expired selama quiz masih aktif
+    if (session.status !== "finished" && session.status !== "canceled") {
+      await setJSON(keys.playerUUID(uuid), data, TTL.PLAYER_UUID);
+    }
+
+    res.json({
+      success: true,
+      data: {
+        token: data.token,
+        username: data.username,
+        sessionStatus: session.status,
+        isSessionActive: !["finished", "canceled"].includes(session.status),
+      },
+    });
+  } catch (error) {
+    console.error("session/uuid error:", error);
+    res.status(500).json({ success: false, message: "Server error" });
   }
 });
 

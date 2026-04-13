@@ -70,9 +70,11 @@ export const getQuestionStats = (
 };
 
 // ─── Process Answer ───────────────────────────────────────────
+// PENTING: Lookup berdasarkan USERNAME (bukan socketId) agar jawaban tetap
+// diproses dengan benar saat socketId berubah karena reconnect/lag.
 export const processAnswer = async (
   sessionToken: string,
-  socketId: string,
+  username: string,   // ← DIUBAH: dari socketId ke username (lebih stabil)
   questionIndex: number,
   answer: string,
   responseTime: number
@@ -98,11 +100,16 @@ export const processAnswer = async (
   const question = quiz.questions[questionIndex];
   if (!question) return { isCorrect: false, pointsEarned: 0, participant: null };
 
+  // FIX BUG: Cari berdasarkan username (case-insensitive) bukan socketId.
+  // socketId berubah setiap reconnect, sehingga tidak reliable sebagai identifier.
+  // username dijamin unik per session dan stabil selama quiz berlangsung.
   const participantIndex = session.participants.findIndex(
-    (p) => p.socketId === socketId
+    (p) => p.username.toLowerCase() === username.toLowerCase()
   );
-  if (participantIndex === -1)
+  if (participantIndex === -1) {
+    console.warn(`⚠️  processAnswer: participant "${username}" tidak ditemukan di sesi ${sessionToken}`);
     return { isCorrect: false, pointsEarned: 0, participant: null };
+  }
 
   const participant = session.participants[participantIndex];
 

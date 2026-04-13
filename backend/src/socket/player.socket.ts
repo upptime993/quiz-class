@@ -1,4 +1,5 @@
 import { Server, Socket } from "socket.io";
+import { randomUUID } from "crypto";
 import Session from "../models/Session.model";
 import { validateToken } from "../services/token.service";
 import { processAnswer, getLeaderboard, checkAndAutoFinish } from "../services/game.service";
@@ -57,31 +58,67 @@ export const initPlayerSocket = (io: Server): void => {
           );
 
           if (existingByUsername) {
-            // Update socketId ke yang baru
-            existingByUsername.socketId = socket.id;
-            existingByUsername.isConnected = true;
-            await session.save();
+            // Atomic update: update socketId sekaligus isConnected dalam satu operasi
+            // Ini mencegah race condition antara reconnect dan answer submission
+            const updatedSession = await Session.findOneAndUpdate(
+              { token: upperToken, "participants.username": existingByUsername.username },
+              {
+                $set: {
+                  "participants.$.socketId": socket.id,
+                  "participants.$.isConnected": true,
+                }
+              },
+              { new: true }
+            );
 
             const room = `session:${upperToken}`;
             socket.join(room);
             (socket as any).sessionToken = upperToken;
             (socket as any).username = existingByUsername.username;
 
+            // Cek atau buat UUID untuk player ini (untuk reconnect via URL)
+            let sessionUUID: string;
+            const existingUUIDData = await getJSON<{ uuid: string }>(
+              keys.playerReconnect(upperToken, existingByUsername.username)
+            );
+            // Coba cari UUID yang sudah ada dari Redis key berbeda
+            const oldReconnectData = existingUUIDData as any;
+            if (oldReconnectData?.sessionUUID) {
+              sessionUUID = oldReconnectData.sessionUUID;
+            } else {
+              sessionUUID = randomUUID();
+            }
+
+            // Simpan UUID mapping ke Redis (7 hari)
+            await setJSON(
+              keys.playerUUID(sessionUUID),
+              { token: upperToken, username: existingByUsername.username },
+              TTL.PLAYER_UUID
+            );
+
             // Simpan data reconnect di Redis (untuk future reconnects)
             await setJSON(
               keys.playerReconnect(upperToken, existingByUsername.username),
-              { token: upperToken, username: existingByUsername.username, avatarEmoji: existingByUsername.avatar?.emoji || "🦊" },
+              {
+                token: upperToken,
+                username: existingByUsername.username,
+                avatarEmoji: existingByUsername.avatar?.emoji || "🦊",
+                sessionUUID,
+              },
               TTL.RECONNECT_DATA
             );
 
+            const sessionForResponse = updatedSession || session;
+
             // Kirim state session ke player (untuk render UI yang benar saat reconnect)
             socket.emit("session:joined", {
-              sessionId: session._id,
+              sessionId: sessionForResponse._id,
               token: upperToken,
               reconnected: true,
-              status: session.status,
-              currentQuestion: session.currentQuestion,
-              participants: session.participants.map((p) => ({
+              status: sessionForResponse.status,
+              currentQuestion: sessionForResponse.currentQuestion,
+              sessionUUID,  // ← UUID untuk URL reconnect
+              participants: sessionForResponse.participants.map((p) => ({
                 username: p.username,
                 avatar: p.avatar,
                 isConnected: p.isConnected,
@@ -90,13 +127,12 @@ export const initPlayerSocket = (io: Server): void => {
             });
 
             // Beritahu peserta lain bahwa player ini reconnect
-            const room2 = `session:${upperToken}`;
-            const connectedCount = session.participants.filter((p) => p.isConnected).length;
-            io.to(room2).emit("session:playerJoined", {
+            const connectedCount = sessionForResponse.participants.filter((p) => p.isConnected).length;
+            io.to(room).emit("session:playerJoined", {
               username: existingByUsername.username,
               avatar: existingByUsername.avatar,
               participantCount: connectedCount,
-              participants: session.participants.map((p) => ({
+              participants: sessionForResponse.participants.map((p) => ({
                 username: p.username,
                 avatar: p.avatar,
                 score: p.score || 0,
@@ -106,13 +142,13 @@ export const initPlayerSocket = (io: Server): void => {
               })),
               reconnected: true,
             });
-            io.of("/admin").to(room2).emit("session:playerJoined", {
+            io.of("/admin").to(room).emit("session:playerJoined", {
               username: existingByUsername.username,
               participantCount: connectedCount,
               reconnected: true,
             });
 
-            console.log(`🔄 ${existingByUsername.username} reconnect ke sesi ${upperToken}`);
+            console.log(`🔄 ${existingByUsername.username} reconnect ke sesi ${upperToken} (UUID: ${sessionUUID.slice(0,8)}...)`);
             return;
           }
 
@@ -166,10 +202,20 @@ export const initPlayerSocket = (io: Server): void => {
 
           await session.save();
 
-          // Simpan reconnect data di Redis
+          // Generate UUID unik untuk player ini (dipakai untuk URL reconnect)
+          const sessionUUID = randomUUID();
+
+          // Simpan UUID mapping ke Redis (7 hari) — key: player-uuid:{uuid}
+          await setJSON(
+            keys.playerUUID(sessionUUID),
+            { token: upperToken, username: username.trim() },
+            TTL.PLAYER_UUID
+          );
+
+          // Simpan reconnect data di Redis (termasuk UUID)
           await setJSON(
             keys.playerReconnect(upperToken, username.trim()),
-            { token: upperToken, username: username.trim(), avatarEmoji: "🦊" },
+            { token: upperToken, username: username.trim(), avatarEmoji: "🦊", sessionUUID },
             TTL.RECONNECT_DATA
           );
 
@@ -181,13 +227,14 @@ export const initPlayerSocket = (io: Server): void => {
 
           const connectedCount = session.participants.filter((p) => p.isConnected).length;
 
-          // Konfirmasi ke player
+          // Konfirmasi ke player (sertakan UUID untuk update URL di frontend)
           socket.emit("session:joined", {
             sessionId: session._id,
             token: upperToken,
             reconnected: false,
             status: session.status,
             currentQuestion: session.currentQuestion,
+            sessionUUID,  // ← UUID untuk URL reconnect
             participants: session.participants.map((p) => ({
               username: p.username,
               avatar: p.avatar,
@@ -217,7 +264,7 @@ export const initPlayerSocket = (io: Server): void => {
           io.to(room).emit("session:playerJoined", joinPayload);
           io.of("/admin").to(room).emit("session:playerJoined", joinPayload);
 
-          console.log(`✅ ${username} bergabung ke sesi ${upperToken} (total: ${connectedCount})`);
+          console.log(`✅ ${username} bergabung ke sesi ${upperToken} (UUID: ${sessionUUID.slice(0,8)}..., total: ${connectedCount})`);
         } catch (error) {
           console.error("player:join error:", error);
           socket.emit("session:error", { message: "Gagal bergabung ke sesi" });
@@ -303,8 +350,24 @@ export const initPlayerSocket = (io: Server): void => {
       }) => {
         try {
           const sessionToken = (socket as any).sessionToken;
-          const username = (socket as any).username;
+          let username = (socket as any).username;
           if (!sessionToken) return;
+
+          // FIX: Jika username tidak ada di socket (misal socket reconnect baru),
+          // coba fallback ke DB menggunakan socketId
+          if (!username) {
+            const fallbackSession = await Session.findOne({ token: sessionToken });
+            const fallbackParticipant = fallbackSession?.participants.find(
+              (p) => p.socketId === socket.id
+            );
+            if (fallbackParticipant) {
+              username = fallbackParticipant.username;
+              (socket as any).username = username; // restore agar tidak perlu fallback lagi
+            } else {
+              console.warn(`⚠️  player:answer: username tidak ditemukan untuk socket ${socket.id}`);
+              return;
+            }
+          }
 
           // Cek status session sebelum proses
           const preCheck = await Session.findOne({ token: sessionToken });
@@ -312,9 +375,11 @@ export const initPlayerSocket = (io: Server): void => {
             return;
           }
 
+          // FIX: Pass username (bukan socket.id) ke processAnswer
+          // Ini kunci utama perbaikan bug jawaban benar dianggap salah
           const { isCorrect, pointsEarned } = await processAnswer(
             sessionToken,
-            socket.id,
+            username,
             data.questionIndex,
             data.answer,
             data.responseTime

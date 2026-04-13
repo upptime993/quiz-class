@@ -49,6 +49,7 @@ export const TTL = {
   GAME_LOCK: 30,            // Lock endQuestion: 30 detik
   TIMER_STATE: 120,         // State timer soal: 2 menit
   SESSION_STATE: 3600,      // Cache state session: 1 jam
+  PLAYER_UUID: 86400 * 7,   // UUID reconnect player: 7 hari
 };
 
 // ─── Key Helpers ──────────────────────────────────────────────
@@ -72,6 +73,11 @@ export const keys = {
   // State duel room untuk API /state
   duelState: (token: string) =>
     `duel-state:${token}`,
+
+  // UUID player untuk reconnect via URL permanen
+  // Format: player-uuid:{uuid} => { token, username }
+  playerUUID: (uuid: string) =>
+    `player-uuid:${uuid}`,
 };
 
 // ─── Redis Helpers ────────────────────────────────────────────
